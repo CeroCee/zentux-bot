@@ -14,7 +14,19 @@ const commands = [
     ),
   new SlashCommandBuilder()
     .setName('info')
-    .setDescription('Consulta tu codigo, estado y tiempo restante'),
+    .setDescription('Consulta tu licencia o la informacion de un comprador')
+    .addUserOption((option) =>
+      option
+        .setName('usuario')
+        .setDescription('Comprador que deseas consultar o autorizar')
+        .setRequired(false)
+    )
+    .addBooleanOption((option) =>
+      option
+        .setName('admin')
+        .setDescription('Solo administradores: true concede acceso, false lo retira')
+        .setRequired(false)
+    ),
   new SlashCommandBuilder()
     .setName('download')
     .setDescription('Descarga las aplicaciones oficiales de Zentux'),

@@ -223,29 +223,70 @@ async function handleInfo(interaction) {
 
   await interaction.deferReply({ flags: EPHEMERAL });
   try {
-    const member = await interaction.guild.members.fetch(interaction.user.id);
-    if (!member.roles.cache.has(BUYER_ROLE_ID)) {
-      return interaction.editReply({ content: 'Necesitas el rol **Zentux | Buyer**. Usa `/canjear codigo` primero.' });
+    const callerMember = await interaction.guild.members.fetch(interaction.user.id);
+    const selectedUser = interaction.options.getUser('usuario');
+    const adminSetting = interaction.options.getBoolean('admin');
+
+    if (adminSetting !== null) {
+      if (!callerMember.permissions.has(PermissionFlagsBits.Administrator)) {
+        return interaction.editReply({ content: 'Solo un administrador puede conceder o retirar este acceso.' });
+      }
+      if (!selectedUser) {
+        return interaction.editReply({ content: 'Selecciona una persona en la opcion `usuario`.' });
+      }
+
+      await licenseApi.setInfoAccess({
+        guildId: interaction.guildId,
+        discordUserId: selectedUser.id,
+        grantedBy: interaction.user.id,
+        enabled: adminSetting
+      });
+      const embed = brandEmbed({
+        color: adminSetting ? COLORS.success : COLORS.danger,
+        title: adminSetting ? '✅ Acceso concedido' : '🔒 Acceso retirado',
+        description: adminSetting
+          ? `${selectedUser} ahora puede consultar compradores con \`/info usuario\`.`
+          : `${selectedUser} ya no puede consultar la informacion de otros compradores.`
+      });
+      return interaction.editReply({ embeds: [embed] });
     }
 
-    const data = await licenseApi.info(interaction.user.id);
+    const targetUser = selectedUser || interaction.user;
+    const isLookingUpAnotherUser = targetUser.id !== interaction.user.id;
+    if (isLookingUpAnotherUser && !callerMember.permissions.has(PermissionFlagsBits.Administrator)) {
+      const access = await licenseApi.infoAccess(interaction.guildId, interaction.user.id);
+      if (!access.allowed) {
+        return interaction.editReply({ content: 'No tienes permiso para consultar la informacion de otros compradores.' });
+      }
+    }
+
+    const targetMember = await interaction.guild.members.fetch(targetUser.id).catch(() => null);
+    if (!targetMember?.roles.cache.has(BUYER_ROLE_ID)) {
+      return interaction.editReply({ content: 'Esa persona no es un comprador activo de Zentux.' });
+    }
+
+    const data = await licenseApi.info(targetUser.id);
     const license = data.license;
     if (!license.active) {
-      await member.roles.remove(BUYER_ROLE_ID, 'Licencia Zentux inactiva o vencida').catch(() => null);
+      await targetMember.roles.remove(BUYER_ROLE_ID, 'Licencia Zentux inactiva o vencida').catch(() => null);
     }
 
     const embed = brandEmbed({
       color: license.active ? COLORS.success : COLORS.danger,
-      title: '🔐 Informacion de tu licencia',
-      description: 'Estos datos son privados y solamente puedes verlos tu.'
+      title: isLookingUpAnotherUser ? '🔎 Informacion del comprador' : '🔐 Informacion de tu licencia',
+      description: isLookingUpAnotherUser
+        ? `Consulta privada de la licencia vinculada a ${targetUser}.`
+        : 'Estos datos son privados y solamente puedes verlos tu.'
     })
       .addFields(
+        { name: 'Usuario de Discord', value: `${targetUser.tag}\n\`${targetUser.id}\`` },
         { name: '🎟️ Codigo', value: `\`${license.licenseKey}\`` },
         { name: '📊 Estado', value: license.active ? '🟢 Activa' : '🔴 Inactiva o vencida', inline: true },
         { name: '⏳ Tiempo restante', value: formatRemaining(license.paidUntil), inline: true },
         { name: '📅 Expira', value: discordDate(license.paidUntil) },
         ...purchaseFields(license)
       );
+    embed.setThumbnail(targetUser.displayAvatarURL({ size: 128 }));
     await interaction.editReply({ embeds: [embed] });
   } catch (error) {
     console.error('Error en /info:', error.code || error.message);

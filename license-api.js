@@ -42,7 +42,9 @@ function createLicenseApi({ baseUrl, secret }) {
     info: (discordUserId) => request('/api/discord/info', { discordUserId }),
     members: () => request('/api/discord/members'),
     logSettings: (guildId) => request('/api/discord/log-settings', { guildId }),
-    setLogChannel: (payload) => request('/api/discord/log-settings/set', payload)
+    setLogChannel: (payload) => request('/api/discord/log-settings/set', payload),
+    infoAccess: (guildId, discordUserId) => request('/api/discord/info-access/check', { guildId, discordUserId }),
+    setInfoAccess: (payload) => request('/api/discord/info-access/set', payload)
   };
 }
 
