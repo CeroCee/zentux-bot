@@ -49,7 +49,11 @@ function createLicenseApi({ baseUrl, secret }) {
     releaseAccess: (guildId, discordUserId) => request('/api/discord/release-access/check', { guildId, discordUserId }),
     setReleaseAccess: (payload) => request('/api/discord/release-access/set', payload),
     pendingPurchases: (guildId) => request('/api/discord/purchases/pending', { guildId }),
-    acknowledgePurchases: (guildId, licenseKeys) => request('/api/discord/purchases/ack', { guildId, licenseKeys })
+    acknowledgePurchases: (guildId, licenseKeys) => request('/api/discord/purchases/ack', { guildId, licenseKeys }),
+    generateGiveaway: (payload) => request('/api/discord/generate-giveaway', payload),
+    createContentCreator: (payload) => request('/api/discord/content/create', payload),
+    contentCreators: (guildId) => request('/api/discord/content/active', { guildId }),
+    deactivateContentCreator: (guildId, discordUserId) => request('/api/discord/content/deactivate', { guildId, discordUserId })
   };
 }
 

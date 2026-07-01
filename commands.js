@@ -97,6 +97,41 @@ const commands = [
             .addChannelTypes(ChannelType.GuildText)
             .setRequired(true)
         )
+    ),
+  new SlashCommandBuilder()
+    .setName('generar')
+    .setDescription('Genera giveaways o reclama el beneficio de creador')
+    .setDMPermission(false)
+    .addSubcommand((subcommand) =>
+      subcommand
+        .setName('giveaway')
+        .setDescription('Solo administradores: genera licencias temporales')
+        .addStringOption((option) =>
+          option
+            .setName('duracion')
+            .setDescription('Duracion de las licencias')
+            .setRequired(true)
+            .addChoices(
+              { name: '1 dia', value: '1' },
+              { name: '7 dias', value: '7' },
+              { name: '15 dias', value: '15' },
+              { name: '30 dias', value: '30' },
+              { name: '2 meses', value: '60' }
+            )
+        )
+        .addIntegerOption((option) =>
+          option
+            .setName('cantidad')
+            .setDescription('Cantidad de keys que deseas generar')
+            .setMinValue(1)
+            .setMaxValue(25)
+            .setRequired(true)
+        )
+    )
+    .addSubcommand((subcommand) =>
+      subcommand
+        .setName('content')
+        .setDescription('Reclama tu key exclusiva de Zentux Content Creator')
     )
 ];
 

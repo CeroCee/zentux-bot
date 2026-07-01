@@ -28,6 +28,7 @@ if (missingEnvironment.length > 0) {
 const TOKEN = process.env.DISCORD_TOKEN;
 const GUILD_ID = process.env.GUILD_ID;
 const BUYER_ROLE_ID = process.env.BUYER_ROLE_ID;
+const CONTENT_CREATOR_ROLE_ID = process.env.CONTENT_CREATOR_ROLE_ID || '1392619993153142834';
 const SYNC_MINUTES = Math.max(1, Number.parseInt(process.env.LICENSE_SYNC_MINUTES || '5', 10) || 5);
 const PURCHASE_SYNC_SECONDS = Math.max(15, Number.parseInt(process.env.PURCHASE_SYNC_SECONDS || '30', 10) || 30);
 const EPHEMERAL = MessageFlags.Ephemeral;
@@ -51,6 +52,7 @@ const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 const redeemAttempts = new Map();
 let roleSyncRunning = false;
 let purchaseSyncRunning = false;
+let contentCreatorSyncRunning = false;
 
 function brandEmbed({ color = COLORS.primary, title, description }) {
   return new EmbedBuilder()
@@ -110,18 +112,20 @@ function paymentMethod(license) {
     stripe: 'Stripe',
     giveaway: 'Regalo',
     custom: 'Licencia personalizada',
+    content_creator: 'Beneficio Content Creator',
     paid: 'Compra directa'
   })[license.source] || 'No disponible';
 }
 
 function licenseOrigin(license) {
+  if (license.source === 'content_creator') return 'Content Creator';
   if (license.source === 'giveaway') return 'Regalada';
   if (license.source === 'custom') return 'Personalizada';
   return 'Comprada';
 }
 
 function formatPayment(license) {
-  if (license.source === 'giveaway' || license.source === 'custom') return 'Gratis';
+  if (['giveaway', 'custom', 'content_creator'].includes(license.source)) return 'Gratis';
   if (!Number.isFinite(license.paymentAmount)) return 'No disponible';
   if (license.paymentCurrency === 'robux') return `${license.paymentAmount.toLocaleString('en-US')} Robux`;
   const currency = String(license.paymentCurrency || 'usd').toUpperCase();
@@ -129,8 +133,17 @@ function formatPayment(license) {
 }
 
 function formatPlan(license) {
+  if (license.source === 'content_creator') return 'Mientras conserve el rol';
   if (!license.durationDays) return 'No disponible';
   return license.durationDays === 365 ? 'Anual (365 dias)' : `${license.durationDays} dia(s)`;
+}
+
+function remainingLabel(license) {
+  return license.source === 'content_creator' ? 'Mientras conserves el rol Content Creator' : formatRemaining(license.paidUntil);
+}
+
+function expiryLabel(license) {
+  return license.source === 'content_creator' ? 'Se desactiva al perder el rol Content Creator' : discordDate(license.paidUntil);
 }
 
 function purchaseFields(license) {
@@ -166,7 +179,9 @@ function licenseErrorMessage(error) {
     user_has_license: 'Tu cuenta de Discord ya tiene otra licencia vinculada.',
     not_linked: 'Tu cuenta no tiene una licencia vinculada.',
     unauthorized: 'El bot no esta autorizado por el servidor de licencias.',
-    unavailable: 'El servidor de licencias no esta disponible. Intenta nuevamente.'
+    unavailable: 'El servidor de licencias no esta disponible. Intenta nuevamente.',
+    already_claimed: 'Ya reclamaste tu key exclusiva de Content Creator.',
+    restricted_license: 'Esa key de Content Creator pertenece a otra cuenta de Discord.'
   };
   return messages[error.code] || 'No se pudo procesar la licencia.';
 }
@@ -206,8 +221,8 @@ async function handleRedeem(interaction) {
     })
       .addFields(
         { name: '🟢 Estado', value: '**Activa**', inline: true },
-        { name: '⏳ Tiempo restante', value: formatRemaining(license.paidUntil), inline: true },
-        { name: '📅 Fecha de expiracion', value: discordDate(license.paidUntil) },
+        { name: '⏳ Tiempo restante', value: remainingLabel(license), inline: true },
+        { name: '📅 Fecha de expiracion', value: expiryLabel(license) },
         ...purchaseFields(license)
       );
     await interaction.editReply({ embeds: [embed] });
@@ -284,8 +299,8 @@ async function handleInfo(interaction) {
         { name: 'Usuario de Discord', value: `${targetUser.tag}\n\`${targetUser.id}\`` },
         { name: '🎟️ Codigo', value: `\`${license.licenseKey}\`` },
         { name: '📊 Estado', value: license.active ? '🟢 Activa' : '🔴 Inactiva o vencida', inline: true },
-        { name: '⏳ Tiempo restante', value: formatRemaining(license.paidUntil), inline: true },
-        { name: '📅 Expira', value: discordDate(license.paidUntil) },
+        { name: '⏳ Tiempo restante', value: remainingLabel(license), inline: true },
+        { name: '📅 Expira', value: expiryLabel(license) },
         ...purchaseFields(license)
       );
     embed.setThumbnail(targetUser.displayAvatarURL({ size: 128 }));
@@ -489,6 +504,86 @@ async function handleReleaseButton(interaction) {
   }
 }
 
+async function handleGenerate(interaction) {
+  if (!interaction.inGuild() || interaction.guildId !== GUILD_ID) {
+    return interaction.reply({ content: 'Este comando solo funciona en el servidor oficial de Zentux.', flags: EPHEMERAL });
+  }
+
+  await interaction.deferReply({ flags: EPHEMERAL });
+  const subcommand = interaction.options.getSubcommand(true);
+  const member = await interaction.guild.members.fetch(interaction.user.id);
+
+  if (subcommand === 'giveaway') {
+    if (!member.permissions.has(PermissionFlagsBits.Administrator)) {
+      return interaction.editReply({ content: 'Solo los administradores pueden generar keys de giveaway.' });
+    }
+    const days = Number.parseInt(interaction.options.getString('duracion', true), 10);
+    const count = interaction.options.getInteger('cantidad', true);
+    const data = await licenseApi.generateGiveaway({ days, count, createdBy: interaction.user.id });
+    const keys = data.licenses.map((license) => license.licenseKey);
+    const embed = brandEmbed({
+      color: COLORS.store,
+      title: '🎁 Keys de giveaway generadas',
+      description: `Se generaron **${keys.length}** licencia(s) de **${days} dias**.\n\n\`\`\`\n${keys.join('\n')}\n\`\`\``
+    });
+    return interaction.editReply({ embeds: [embed] });
+  }
+
+  if (!member.roles.cache.has(CONTENT_CREATOR_ROLE_ID)) {
+    return interaction.editReply({ content: 'Necesitas el rol **Zentux | Content Creator** para reclamar esta key.' });
+  }
+
+  const data = await licenseApi.createContentCreator({
+    guildId: interaction.guildId,
+    discordUserId: interaction.user.id,
+    discordUsername: interaction.user.username
+  });
+  if (!member.roles.cache.has(BUYER_ROLE_ID)) {
+    await member.roles.add(BUYER_ROLE_ID, 'Beneficio de Zentux Content Creator');
+  }
+  const embed = brandEmbed({
+    color: COLORS.success,
+    title: data.reactivated ? '✅ Beneficio reactivado' : '✅ Key de Content Creator creada',
+    description: [
+      `Tu key exclusiva es:\n\`${data.license.licenseKey}\``,
+      '',
+      '**Vigencia:** mientras conserves el rol Zentux | Content Creator.',
+      'Solo tu cuenta de Discord puede vincular esta licencia.'
+    ].join('\n')
+  });
+  return interaction.editReply({ embeds: [embed] });
+}
+
+async function syncContentCreatorLicenses() {
+  if (contentCreatorSyncRunning) return;
+  contentCreatorSyncRunning = true;
+  try {
+    const guild = client.guilds.cache.get(GUILD_ID) || await client.guilds.fetch(GUILD_ID);
+    const data = await licenseApi.contentCreators(GUILD_ID);
+    let deactivated = 0;
+
+    for (const creator of data.creators || []) {
+      const member = await guild.members.fetch(creator.discordUserId).catch(() => null);
+      if (member?.roles.cache.has(CONTENT_CREATOR_ROLE_ID)) continue;
+
+      await licenseApi.deactivateContentCreator(GUILD_ID, creator.discordUserId);
+      deactivated += 1;
+      if (member?.roles.cache.has(BUYER_ROLE_ID)) {
+        const fallback = await licenseApi.info(creator.discordUserId).catch(() => null);
+        if (!fallback?.license?.active) {
+          await member.roles.remove(BUYER_ROLE_ID, 'Perdio el rol Zentux Content Creator').catch(() => null);
+        }
+      }
+    }
+
+    if (deactivated > 0) console.log(`Licencias Content Creator desactivadas: ${deactivated}.`);
+  } catch (error) {
+    console.error('No se pudieron sincronizar los Content Creators:', error.code || error.message);
+  } finally {
+    contentCreatorSyncRunning = false;
+  }
+}
+
 async function sendLog(channelId, embed) {
   if (!channelId) return;
   const channel = await client.channels.fetch(channelId).catch(() => null);
@@ -632,8 +727,10 @@ client.once(Events.ClientReady, async (readyClient) => {
   }
   await syncBuyerRoles();
   await syncPurchaseLogs();
+  await syncContentCreatorLicenses();
   setInterval(syncBuyerRoles, SYNC_MINUTES * 60 * 1000).unref();
   setInterval(syncPurchaseLogs, PURCHASE_SYNC_SECONDS * 1000).unref();
+  setInterval(syncContentCreatorLicenses, SYNC_MINUTES * 60 * 1000).unref();
 });
 
 client.on(Events.InteractionCreate, async (interaction) => {
@@ -647,12 +744,16 @@ client.on(Events.InteractionCreate, async (interaction) => {
       if (interaction.commandName === 'compra') return await handlePurchase(interaction);
       if (interaction.commandName === 'download') return await handleDownload(interaction);
       if (interaction.commandName === 'liberar') return await handleReleaseCommand(interaction);
+      if (interaction.commandName === 'generar') return await handleGenerate(interaction);
       if (interaction.commandName === 'logs') return await handleLogs(interaction);
     }
   } catch (error) {
     console.error('Error manejando interaccion:', error);
     if (!interaction.isRepliable()) return;
-    const payload = { content: 'Ocurrio un error inesperado.', flags: EPHEMERAL };
+    const payload = {
+      content: error.code ? licenseErrorMessage(error) : 'Ocurrio un error inesperado.',
+      flags: EPHEMERAL
+    };
     if (interaction.deferred || interaction.replied) {
       await interaction.editReply({ content: payload.content, components: [], embeds: [] }).catch(() => null);
     } else {
