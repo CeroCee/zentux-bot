@@ -14,7 +14,13 @@ const commands = [
     ),
   new SlashCommandBuilder()
     .setName('info')
-    .setDescription('Muestra el estado y tiempo restante de tu licencia')
+    .setDescription('Consulta tu codigo, estado y tiempo restante'),
+  new SlashCommandBuilder()
+    .setName('download')
+    .setDescription('Descarga las aplicaciones oficiales de Zentux'),
+  new SlashCommandBuilder()
+    .setName('compra')
+    .setDescription('Compra una licencia de Zentux con Stripe o Robux')
 ];
 
 module.exports = { commands };

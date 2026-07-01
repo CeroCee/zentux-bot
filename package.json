@@ -1,12 +1,13 @@
 {
   "name": "zentux-bot",
   "version": "1.0.0",
-  "description": "",
+  "description": "Bot oficial de Zentux para licencias, descargas, compras y soporte.",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
     "deploy-commands": "node deploy-commands.js",
-    "check": "node --check index.js && node --check deploy-commands.js && node --check license-api.js && node --check commands.js"
+    "update-profile": "node update-profile.js",
+    "check": "node --check index.js && node --check deploy-commands.js && node --check license-api.js && node --check commands.js && node --check update-profile.js"
   },
   "keywords": [],
   "author": "",

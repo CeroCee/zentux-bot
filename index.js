@@ -8,8 +8,7 @@ const {
   Events,
   GatewayIntentBits,
   MessageFlags,
-  PermissionFlagsBits,
-  StringSelectMenuBuilder
+  PermissionFlagsBits
 } = require('discord.js');
 const { createLicenseApi, LicenseApiError } = require('./license-api');
 
@@ -31,41 +30,38 @@ const GUILD_ID = process.env.GUILD_ID;
 const BUYER_ROLE_ID = process.env.BUYER_ROLE_ID;
 const SYNC_MINUTES = Math.max(1, Number.parseInt(process.env.LICENSE_SYNC_MINUTES || '5', 10) || 5);
 const EPHEMERAL = MessageFlags.Ephemeral;
+const BOT_DISPLAY_NAME = '𝒁𝒆𝒏𝒕𝒖𝒙';
+const DOWNLOAD_URL = 'https://www.zentux.gg/';
+const STRIPE_URL = 'https://buy.stripe.com/8x29ALdMMeKmcSs60q1wY01';
+const ROBUX_URL = 'https://www.roblox.com/es/games/137296685067625/Zentux-Key-Center';
+const COLORS = {
+  primary: 0x7c3aed,
+  success: 0x22c55e,
+  danger: 0xef4444,
+  store: 0xf5b800
+};
 
 const licenseApi = createLicenseApi({
   baseUrl: process.env.LICENSE_API_URL,
   secret: process.env.DISCORD_LICENSE_SECRET
 });
 
-const ROBLOX_LINKS = {
-  robux_143: {
-    label: 'Mensualidad 143 Robux',
-    url: process.env.ROBLOX_LINK_143 || 'https://www.roblox.com/es/game-pass/1636360767/Mensualidad-143-Robux'
-  },
-  robux_multi: {
-    label: 'MultiVersion 715 Robux',
-    url: process.env.ROBLOX_LINK_MULTI || 'https://www.roblox.com/es/game-pass/1636114713/Mensualidad-MultiVersion-715-Robux'
-  },
-  robux_custom: {
-    label: 'Custom 715 Robux',
-    url: process.env.ROBLOX_LINK_CUSTOM || 'https://www.roblox.com/es/game-pass/1636070919/Mensualidad-715-Custom'
-  }
-};
-
-const PAYPAL_LINKS = {
-  paypal_299: {
-    label: 'Mensualidad $2.99',
-    url: process.env.PAYPAL_LINK_299 || 'https://www.paypal.com/webapps/billing/plans/subscribe?plan_id=P-0LB030257J995744NNFBZGLQ'
-  },
-  paypal_499: {
-    label: 'MultiVersion $4.99',
-    url: process.env.PAYPAL_LINK_499 || 'https://www.paypal.com/webapps/billing/plans/subscribe?plan_id=P-6B5181485U4307252NFBZFPA'
-  }
-};
-
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 const redeemAttempts = new Map();
 let roleSyncRunning = false;
+
+function brandEmbed({ color = COLORS.primary, title, description }) {
+  return new EmbedBuilder()
+    .setColor(color)
+    .setAuthor({
+      name: 'Zentux',
+      iconURL: client.user?.displayAvatarURL({ size: 128 })
+    })
+    .setTitle(title)
+    .setDescription(description)
+    .setFooter({ text: 'Zentux | Licencias seguras y soporte oficial' })
+    .setTimestamp();
+}
 
 function getRedeemCooldown(userId) {
   const now = Date.now();
@@ -156,14 +152,15 @@ async function handleRedeem(interaction) {
     redeemAttempts.delete(interaction.user.id);
 
     const license = data.license;
-    const embed = new EmbedBuilder()
-      .setColor(0x35d07f)
-      .setTitle('Licencia canjeada')
-      .setDescription(`Se agrego el rol **${role.name}** a tu cuenta.`)
+    const embed = brandEmbed({
+      color: COLORS.success,
+      title: '✅ Licencia canjeada correctamente',
+      description: `Tu licencia fue verificada y recibiste el rol **${role.name}**.`
+    })
       .addFields(
-        { name: 'Estado', value: 'Activa', inline: true },
-        { name: 'Tiempo restante', value: formatRemaining(license.paidUntil), inline: true },
-        { name: 'Expira', value: discordDate(license.paidUntil) }
+        { name: '🟢 Estado', value: '**Activa**', inline: true },
+        { name: '⏳ Tiempo restante', value: formatRemaining(license.paidUntil), inline: true },
+        { name: '📅 Fecha de expiracion', value: discordDate(license.paidUntil) }
       );
     await interaction.editReply({ embeds: [embed] });
   } catch (error) {
@@ -190,16 +187,17 @@ async function handleInfo(interaction) {
       await member.roles.remove(BUYER_ROLE_ID, 'Licencia Zentux inactiva o vencida').catch(() => null);
     }
 
-    const embed = new EmbedBuilder()
-      .setColor(license.active ? 0x35d07f : 0xe5484d)
-      .setTitle('Tu licencia Zentux')
+    const embed = brandEmbed({
+      color: license.active ? COLORS.success : COLORS.danger,
+      title: '🔐 Informacion de tu licencia',
+      description: 'Estos datos son privados y solamente puedes verlos tu.'
+    })
       .addFields(
-        { name: 'Codigo', value: `\`${license.licenseKey}\`` },
-        { name: 'Estado', value: license.active ? 'Activa' : 'Inactiva o vencida', inline: true },
-        { name: 'Tiempo restante', value: formatRemaining(license.paidUntil), inline: true },
-        { name: 'Expira', value: discordDate(license.paidUntil) }
-      )
-      .setFooter({ text: 'Esta informacion solo es visible para ti.' });
+        { name: '🎟️ Codigo', value: `\`${license.licenseKey}\`` },
+        { name: '📊 Estado', value: license.active ? '🟢 Activa' : '🔴 Inactiva o vencida', inline: true },
+        { name: '⏳ Tiempo restante', value: formatRemaining(license.paidUntil), inline: true },
+        { name: '📅 Expira', value: discordDate(license.paidUntil) }
+      );
     await interaction.editReply({ embeds: [embed] });
   } catch (error) {
     console.error('Error en /info:', error.code || error.message);
@@ -208,73 +206,54 @@ async function handleInfo(interaction) {
 }
 
 async function handlePurchase(interaction) {
-  await interaction.deferReply({ flags: EPHEMERAL });
-  const embed = new EmbedBuilder()
-    .setColor(0xe3262e)
-    .setTitle('Zentux - Compra')
-    .setDescription([
-      '**Incluye:**',
-      '- Optimizador',
-      '- Autoclicker',
-      '- Actualizaciones futuras',
-      '- Multiversion',
+  const embed = brandEmbed({
+    color: COLORS.store,
+    title: '🛒 Compra tu licencia Zentux',
+    description: [
+      'Elige el metodo de pago que prefieras:',
       '',
-      'Selecciona un metodo de pago.'
-    ].join('\n'));
+      '💳 **Stripe** - Pago seguro con tarjeta.',
+      '🎮 **Robux** - Compra desde Zentux Key Center en Roblox.',
+      '',
+      'Todas las licencias dan acceso al ecosistema de aplicaciones Zentux.'
+    ].join('\n')
+  });
   const buttons = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('compra_btn_robux').setLabel('Robux').setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId('compra_btn_dinero').setLabel('Dinero').setStyle(ButtonStyle.Success)
+    new ButtonBuilder()
+      .setLabel('Comprar con Stripe')
+      .setEmoji('💳')
+      .setStyle(ButtonStyle.Link)
+      .setURL(STRIPE_URL),
+    new ButtonBuilder()
+      .setLabel('Comprar con Robux')
+      .setEmoji('🎮')
+      .setStyle(ButtonStyle.Link)
+      .setURL(ROBUX_URL)
   );
-  await interaction.editReply({ embeds: [embed], components: [buttons] });
+  await interaction.reply({ embeds: [embed], components: [buttons], flags: EPHEMERAL });
 }
 
-async function handlePurchaseComponent(interaction) {
-  if (interaction.isButton() && interaction.customId === 'compra_btn_robux') {
-    const select = new StringSelectMenuBuilder()
-      .setCustomId('compra_select_robux')
-      .setPlaceholder('Elige tu plan en Robux')
-      .addOptions(Object.entries(ROBLOX_LINKS).map(([value, item]) => ({ label: item.label, value })));
-    return interaction.reply({
-      content: 'Selecciona tu opcion de pago en Robux:',
-      components: [new ActionRowBuilder().addComponents(select)],
-      flags: EPHEMERAL
-    });
-  }
-
-  if (interaction.isButton() && interaction.customId === 'compra_btn_dinero') {
-    const select = new StringSelectMenuBuilder()
-      .setCustomId('compra_select_paypal')
-      .setPlaceholder('Elige tu plan en PayPal')
-      .addOptions(Object.entries(PAYPAL_LINKS).map(([value, item]) => ({ label: item.label, value })));
-    return interaction.reply({
-      content: 'Selecciona tu opcion de pago en PayPal:',
-      components: [new ActionRowBuilder().addComponents(select)],
-      flags: EPHEMERAL
-    });
-  }
-
-  if (interaction.isStringSelectMenu()) {
-    const links = interaction.customId === 'compra_select_robux'
-      ? ROBLOX_LINKS
-      : interaction.customId === 'compra_select_paypal'
-        ? PAYPAL_LINKS
-        : null;
-    if (!links) return false;
-    const item = links[interaction.values[0]];
-    if (!item) {
-      return interaction.reply({ content: 'Opcion no reconocida.', flags: EPHEMERAL });
-    }
-    const button = new ButtonBuilder()
-      .setLabel(interaction.customId.endsWith('robux') ? 'Abrir en Roblox' : 'Abrir en PayPal')
-      .setStyle(ButtonStyle.Link)
-      .setURL(item.url);
-    return interaction.reply({
-      content: `Plan seleccionado: **${item.label}**`,
-      components: [new ActionRowBuilder().addComponents(button)],
-      flags: EPHEMERAL
-    });
-  }
-  return false;
+async function handleDownload(interaction) {
+  const embed = brandEmbed({
+    title: '🚀 Descarga Zentux',
+    description: [
+      'Descarga las aplicaciones oficiales y sus versiones mas recientes desde nuestro sitio web.',
+      '',
+      '✅ Descargas verificadas',
+      '🛡️ Acceso seguro',
+      '🔄 Actualizaciones oficiales'
+    ].join('\n')
+  });
+  const button = new ButtonBuilder()
+    .setLabel('Abrir zentux.gg')
+    .setEmoji('📥')
+    .setStyle(ButtonStyle.Link)
+    .setURL(DOWNLOAD_URL);
+  await interaction.reply({
+    embeds: [embed],
+    components: [new ActionRowBuilder().addComponents(button)],
+    flags: EPHEMERAL
+  });
 }
 
 async function syncBuyerRoles() {
@@ -310,6 +289,17 @@ async function syncBuyerRoles() {
 
 client.once(Events.ClientReady, async (readyClient) => {
   console.log(`Bot listo como ${readyClient.user.tag}`);
+  readyClient.user.setPresence({
+    activities: [{ name: '/download | /compra' }],
+    status: 'online'
+  });
+  const guild = readyClient.guilds.cache.get(GUILD_ID) || await readyClient.guilds.fetch(GUILD_ID);
+  const me = guild.members.me || await guild.members.fetchMe();
+  if (me.nickname !== BOT_DISPLAY_NAME) {
+    await me.setNickname(BOT_DISPLAY_NAME, 'Identidad oficial de Zentux').catch((error) => {
+      console.error('No se pudo actualizar el apodo del bot:', error.message);
+    });
+  }
   await syncBuyerRoles();
   setInterval(syncBuyerRoles, SYNC_MINUTES * 60 * 1000).unref();
 });
@@ -320,8 +310,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
       if (interaction.commandName === 'canjear') return await handleRedeem(interaction);
       if (interaction.commandName === 'info') return await handleInfo(interaction);
       if (interaction.commandName === 'compra') return await handlePurchase(interaction);
+      if (interaction.commandName === 'download') return await handleDownload(interaction);
     }
-    await handlePurchaseComponent(interaction);
   } catch (error) {
     console.error('Error manejando interaccion:', error);
     if (!interaction.isRepliable()) return;
