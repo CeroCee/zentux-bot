@@ -29,6 +29,7 @@ const TOKEN = process.env.DISCORD_TOKEN;
 const GUILD_ID = process.env.GUILD_ID;
 const BUYER_ROLE_ID = process.env.BUYER_ROLE_ID;
 const SYNC_MINUTES = Math.max(1, Number.parseInt(process.env.LICENSE_SYNC_MINUTES || '5', 10) || 5);
+const PURCHASE_SYNC_SECONDS = Math.max(15, Number.parseInt(process.env.PURCHASE_SYNC_SECONDS || '30', 10) || 30);
 const EPHEMERAL = MessageFlags.Ephemeral;
 const BOT_DISPLAY_NAME = '𝒁𝒆𝒏𝒕𝒖𝒙';
 const DOWNLOAD_URL = 'https://www.zentux.gg/';
@@ -49,6 +50,7 @@ const licenseApi = createLicenseApi({
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 const redeemAttempts = new Map();
 let roleSyncRunning = false;
+let purchaseSyncRunning = false;
 
 function brandEmbed({ color = COLORS.primary, title, description }) {
   return new EmbedBuilder()
@@ -356,17 +358,6 @@ async function sendLicenseLogs(interaction, license) {
   try {
     const data = await licenseApi.logSettings(interaction.guildId);
     const config = data.config || {};
-    const purchaseEmbed = brandEmbed({
-      color: COLORS.store,
-      title: '💳 Nueva licencia vinculada',
-      description: `${interaction.user} vinculo una licencia a Discord.`
-    }).addFields(
-      { name: 'Usuario de Discord', value: `${interaction.user.tag}\n\`${interaction.user.id}\`` },
-      { name: 'Codigo', value: `\`${license.licenseKey}\`` },
-      ...purchaseFields(license),
-      { name: 'Vence', value: discordDate(license.paidUntil) }
-    );
-
     const redemptionEmbed = brandEmbed({
       color: COLORS.success,
       title: '✅ Licencia canjeada',
@@ -380,10 +371,7 @@ async function sendLicenseLogs(interaction, license) {
       { name: 'Vencimiento', value: discordDate(license.paidUntil) }
     );
 
-    await Promise.all([
-      sendLog(config.purchaseLogChannelId, purchaseEmbed),
-      sendLog(config.redemptionLogChannelId, redemptionEmbed)
-    ]);
+    await sendLog(config.redemptionLogChannelId, redemptionEmbed);
   } catch (error) {
     console.error('No se pudieron enviar los logs de licencia:', error.code || error.message);
   }
@@ -410,6 +398,50 @@ async function handleLogs(interaction) {
     description: `Los logs de **${label}** se enviaran a ${channel}.`
   });
   await interaction.editReply({ embeds: [embed] });
+  if (type === 'purchases') await syncPurchaseLogs();
+}
+
+async function syncPurchaseLogs() {
+  if (purchaseSyncRunning) return;
+  purchaseSyncRunning = true;
+  try {
+    const settings = await licenseApi.logSettings(GUILD_ID);
+    const channelId = settings.config?.purchaseLogChannelId;
+    if (!channelId) return;
+
+    const channel = await client.channels.fetch(channelId).catch(() => null);
+    if (!channel?.isTextBased()) return;
+    const data = await licenseApi.pendingPurchases(GUILD_ID);
+    const deliveredKeys = [];
+
+    for (const license of data.purchases || []) {
+      const embed = brandEmbed({
+        color: COLORS.store,
+        title: '💳 Nueva compra | Key generada',
+        description: 'El servidor genero una licencia nueva y lista para entregar.'
+      }).addFields(
+        { name: 'Codigo generado', value: `\`${license.licenseKey}\`` },
+        { name: 'Comprador', value: String(license.buyer || 'No disponible'), inline: true },
+        { name: 'Metodo de pago', value: paymentMethod(license), inline: true },
+        { name: 'Importe', value: formatPayment(license), inline: true },
+        { name: 'Plan', value: formatPlan(license), inline: true },
+        { name: 'Estado', value: license.active ? 'Activa' : 'Inactiva', inline: true },
+        { name: 'Generada', value: formatDiscordDate(license.createdAt), inline: true },
+        { name: 'Vencimiento', value: discordDate(license.paidUntil) }
+      );
+      await channel.send({ embeds: [embed] });
+      deliveredKeys.push(license.licenseKey);
+    }
+
+    if (deliveredKeys.length > 0) {
+      await licenseApi.acknowledgePurchases(GUILD_ID, deliveredKeys);
+      console.log(`Logs de compras enviados: ${deliveredKeys.length}.`);
+    }
+  } catch (error) {
+    console.error('No se pudieron sincronizar los logs de compras:', error.code || error.message);
+  } finally {
+    purchaseSyncRunning = false;
+  }
 }
 
 async function syncBuyerRoles() {
@@ -457,7 +489,9 @@ client.once(Events.ClientReady, async (readyClient) => {
     });
   }
   await syncBuyerRoles();
+  await syncPurchaseLogs();
   setInterval(syncBuyerRoles, SYNC_MINUTES * 60 * 1000).unref();
+  setInterval(syncPurchaseLogs, PURCHASE_SYNC_SECONDS * 1000).unref();
 });
 
 client.on(Events.InteractionCreate, async (interaction) => {
