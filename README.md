@@ -4,7 +4,6 @@ Discord bot for purchases and Zentux license access.
 
 ## Commands
 
-- `/compra`: shows purchase links.
 - `/canjear codigo`: links an active license to one Discord account and grants the buyer role.
 - `/info`: privately shows the linked key, status, expiration date, and remaining time.
 

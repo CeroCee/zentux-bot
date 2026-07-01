@@ -2,9 +2,6 @@ const { SlashCommandBuilder } = require('discord.js');
 
 const commands = [
   new SlashCommandBuilder()
-    .setName('compra')
-    .setDescription('Muestra las opciones de compra de Zentux'),
-  new SlashCommandBuilder()
     .setName('canjear')
     .setDescription('Vincula una licencia de Zentux con tu cuenta de Discord')
     .addStringOption((option) =>
