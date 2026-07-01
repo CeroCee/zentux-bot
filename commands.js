@@ -40,6 +40,34 @@ const commands = [
       subcommand
         .setName('key')
         .setDescription('Libera tu licencia del dispositivo donde fue utilizada')
+    )
+    .addSubcommand((subcommand) =>
+      subcommand
+        .setName('admin')
+        .setDescription('Libera la licencia vinculada a otro comprador')
+        .addUserOption((option) =>
+          option
+            .setName('usuario')
+            .setDescription('Comprador cuya licencia deseas liberar')
+            .setRequired(true)
+        )
+    )
+    .addSubcommand((subcommand) =>
+      subcommand
+        .setName('access')
+        .setDescription('Concede o retira permiso para liberar licencias ajenas')
+        .addUserOption((option) =>
+          option
+            .setName('usuario')
+            .setDescription('Persona que recibira o perdera el permiso')
+            .setRequired(true)
+        )
+        .addBooleanOption((option) =>
+          option
+            .setName('permitir')
+            .setDescription('true concede acceso; false lo retira')
+            .setRequired(true)
+        )
     ),
   new SlashCommandBuilder()
     .setName('logs')

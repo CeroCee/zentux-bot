@@ -353,28 +353,67 @@ async function handleReleaseCommand(interaction) {
   }
 
   await interaction.deferReply({ flags: EPHEMERAL });
-  const member = await interaction.guild.members.fetch(interaction.user.id);
-  if (!member.roles.cache.has(BUYER_ROLE_ID)) {
+  const subcommand = interaction.options.getSubcommand(true);
+  const callerMember = await interaction.guild.members.fetch(interaction.user.id);
+
+  if (subcommand === 'access') {
+    if (!callerMember.permissions.has(PermissionFlagsBits.Administrator)) {
+      return interaction.editReply({ content: 'Solo un administrador puede conceder o retirar este permiso.' });
+    }
+    const targetUser = interaction.options.getUser('usuario', true);
+    const enabled = interaction.options.getBoolean('permitir', true);
+    await licenseApi.setReleaseAccess({
+      guildId: interaction.guildId,
+      discordUserId: targetUser.id,
+      grantedBy: interaction.user.id,
+      enabled
+    });
+    const embed = brandEmbed({
+      color: enabled ? COLORS.success : COLORS.danger,
+      title: enabled ? '✅ Permiso concedido' : '🔒 Permiso retirado',
+      description: enabled
+        ? `${targetUser} ahora puede usar \`/liberar admin\` con compradores.`
+        : `${targetUser} ya no puede liberar licencias de otros compradores.`
+    });
+    return interaction.editReply({ embeds: [embed] });
+  }
+
+  let targetUser = interaction.user;
+  if (subcommand === 'admin') {
+    const allowed = await canReleaseOtherLicenses(interaction.guild, interaction.user.id);
+    if (!allowed) {
+      return interaction.editReply({ content: 'No tienes permiso para liberar licencias de otros compradores.' });
+    }
+    targetUser = interaction.options.getUser('usuario', true);
+  } else if (!callerMember.roles.cache.has(BUYER_ROLE_ID)) {
     return interaction.editReply({ content: 'Necesitas una licencia canjeada y el rol **Zentux | Buyer**.' });
   }
 
-  const data = await licenseApi.info(interaction.user.id);
+  const targetMember = await interaction.guild.members.fetch(targetUser.id).catch(() => null);
+  if (!targetMember?.roles.cache.has(BUYER_ROLE_ID)) {
+    return interaction.editReply({ content: 'Esa persona no tiene una licencia activa con el rol **Zentux | Buyer**.' });
+  }
+
+  const data = await licenseApi.info(targetUser.id);
   if (!data.license?.active) {
-    return interaction.editReply({ content: 'Tu licencia no esta activa y no puede liberarse.' });
+    return interaction.editReply({ content: 'La licencia vinculada no esta activa y no puede liberarse.' });
   }
 
   const embed = brandEmbed({
     color: COLORS.store,
     title: '🔓 Liberar licencia del dispositivo',
     description: [
+      `Propietario: ${targetUser}`,
       `Licencia vinculada: \`${data.license.licenseKey}\``,
       '',
       'Esta accion quitara el dispositivo guardado y permitira activar la misma key en otro PC.',
-      '**La licencia debe pertenecer a tu cuenta de Discord.**'
+      subcommand === 'key'
+        ? '**Esta es la licencia vinculada a tu cuenta de Discord.**'
+        : `**Liberacion administrativa solicitada por ${interaction.user}.**`
     ].join('\n')
   });
   const button = new ButtonBuilder()
-    .setCustomId(`release_device:${interaction.user.id}`)
+    .setCustomId(`release_device:${interaction.user.id}:${targetUser.id}`)
     .setLabel('Liberar dispositivo')
     .setEmoji('🔓')
     .setStyle(ButtonStyle.Danger);
@@ -384,8 +423,15 @@ async function handleReleaseCommand(interaction) {
   });
 }
 
+async function canReleaseOtherLicenses(guild, userId) {
+  const member = await guild.members.fetch(userId).catch(() => null);
+  if (member?.permissions.has(PermissionFlagsBits.Administrator)) return true;
+  const access = await licenseApi.releaseAccess(guild.id, userId);
+  return Boolean(access.allowed);
+}
+
 async function handleReleaseButton(interaction) {
-  const [action, ownerId] = interaction.customId.split(':');
+  const [action, ownerId, targetId] = interaction.customId.split(':');
   if (interaction.user.id !== ownerId) {
     return interaction.reply({ content: 'Este boton pertenece a otra persona.', flags: EPHEMERAL });
   }
@@ -394,15 +440,17 @@ async function handleReleaseButton(interaction) {
     const embed = brandEmbed({
       color: COLORS.danger,
       title: '⚠️ Confirmar liberacion',
-      description: '¿Estas seguro de que quieres quitar el dispositivo vinculado a tu licencia?'
+      description: ownerId === targetId
+        ? '¿Estas seguro de que quieres quitar el dispositivo vinculado a tu licencia?'
+        : `¿Estas seguro de que quieres liberar la licencia de <@${targetId}>?`
     });
     const buttons = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
-        .setCustomId(`release_confirm:${ownerId}`)
+        .setCustomId(`release_confirm:${ownerId}:${targetId}`)
         .setLabel('Si, liberar')
         .setStyle(ButtonStyle.Danger),
       new ButtonBuilder()
-        .setCustomId(`release_cancel:${ownerId}`)
+        .setCustomId(`release_cancel:${ownerId}:${targetId}`)
         .setLabel('Cancelar')
         .setStyle(ButtonStyle.Secondary)
     );
@@ -418,13 +466,23 @@ async function handleReleaseButton(interaction) {
   }
 
   if (action === 'release_confirm') {
+    if (ownerId !== targetId) {
+      const allowed = await canReleaseOtherLicenses(interaction.guild, ownerId);
+      if (!allowed) {
+        return interaction.update({
+          content: 'Tu permiso para liberar licencias ajenas fue retirado.',
+          embeds: [],
+          components: []
+        });
+      }
+    }
     await interaction.deferUpdate();
-    const data = await licenseApi.releaseDevice(interaction.user.id);
+    const data = await licenseApi.releaseDevice(targetId);
     const embed = brandEmbed({
       color: data.released ? COLORS.success : COLORS.primary,
       title: data.released ? '✅ Dispositivo liberado' : 'ℹ️ La licencia ya estaba libre',
       description: data.released
-        ? `La key \`${data.license.licenseKey}\` ya puede activarse en otro dispositivo.`
+        ? `La key \`${data.license.licenseKey}\` de <@${targetId}> ya puede activarse en otro dispositivo.`
         : 'Tu licencia no tenia ningun dispositivo vinculado.'
     });
     return interaction.editReply({ embeds: [embed], components: [] });

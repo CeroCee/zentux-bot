@@ -46,6 +46,8 @@ function createLicenseApi({ baseUrl, secret }) {
     setLogChannel: (payload) => request('/api/discord/log-settings/set', payload),
     infoAccess: (guildId, discordUserId) => request('/api/discord/info-access/check', { guildId, discordUserId }),
     setInfoAccess: (payload) => request('/api/discord/info-access/set', payload),
+    releaseAccess: (guildId, discordUserId) => request('/api/discord/release-access/check', { guildId, discordUserId }),
+    setReleaseAccess: (payload) => request('/api/discord/release-access/set', payload),
     pendingPurchases: (guildId) => request('/api/discord/purchases/pending', { guildId }),
     acknowledgePurchases: (guildId, licenseKeys) => request('/api/discord/purchases/ack', { guildId, licenseKeys })
   };
