@@ -101,6 +101,7 @@ const commands = [
   new SlashCommandBuilder()
     .setName('generar')
     .setDescription('Genera giveaways o reclama el beneficio de creador')
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
     .setDMPermission(false)
     .addSubcommand((subcommand) =>
       subcommand
@@ -130,7 +131,7 @@ const commands = [
     )
     .addSubcommand((subcommand) =>
       subcommand
-        .setName('content')
+        .setName('key')
         .setDescription('Reclama tu key exclusiva de Zentux Content Creator')
     )
 ];

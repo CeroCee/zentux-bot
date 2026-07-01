@@ -18,8 +18,6 @@ async function main() {
   if (GUILD_ID) {
     console.log('Eliminando comandos globales antiguos...');
     await rest.put(Routes.applicationCommands(CLIENT_ID), { body: [] });
-    console.log('Limpiando comandos y permisos anteriores del servidor...');
-    await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: [] });
     console.log(`Registrando ${body.length} comandos en el servidor ${GUILD_ID}...`);
     await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body });
     console.log('Comandos del servidor registrados.');
