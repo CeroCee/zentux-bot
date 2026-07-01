@@ -34,6 +34,14 @@ const commands = [
     .setName('compra')
     .setDescription('Compra una licencia de Zentux con Stripe o Robux'),
   new SlashCommandBuilder()
+    .setName('liberar')
+    .setDescription('Administra el dispositivo vinculado a tu licencia')
+    .addSubcommand((subcommand) =>
+      subcommand
+        .setName('key')
+        .setDescription('Libera tu licencia del dispositivo donde fue utilizada')
+    ),
+  new SlashCommandBuilder()
     .setName('logs')
     .setDescription('Configura los canales privados de actividad de Zentux')
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)

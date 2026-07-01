@@ -347,6 +347,90 @@ async function handleDownload(interaction) {
   });
 }
 
+async function handleReleaseCommand(interaction) {
+  if (!interaction.inGuild() || interaction.guildId !== GUILD_ID) {
+    return interaction.reply({ content: 'Este comando solo funciona en el servidor oficial de Zentux.', flags: EPHEMERAL });
+  }
+
+  await interaction.deferReply({ flags: EPHEMERAL });
+  const member = await interaction.guild.members.fetch(interaction.user.id);
+  if (!member.roles.cache.has(BUYER_ROLE_ID)) {
+    return interaction.editReply({ content: 'Necesitas una licencia canjeada y el rol **Zentux | Buyer**.' });
+  }
+
+  const data = await licenseApi.info(interaction.user.id);
+  if (!data.license?.active) {
+    return interaction.editReply({ content: 'Tu licencia no esta activa y no puede liberarse.' });
+  }
+
+  const embed = brandEmbed({
+    color: COLORS.store,
+    title: '🔓 Liberar licencia del dispositivo',
+    description: [
+      `Licencia vinculada: \`${data.license.licenseKey}\``,
+      '',
+      'Esta accion quitara el dispositivo guardado y permitira activar la misma key en otro PC.',
+      '**La licencia debe pertenecer a tu cuenta de Discord.**'
+    ].join('\n')
+  });
+  const button = new ButtonBuilder()
+    .setCustomId(`release_device:${interaction.user.id}`)
+    .setLabel('Liberar dispositivo')
+    .setEmoji('🔓')
+    .setStyle(ButtonStyle.Danger);
+  await interaction.editReply({
+    embeds: [embed],
+    components: [new ActionRowBuilder().addComponents(button)]
+  });
+}
+
+async function handleReleaseButton(interaction) {
+  const [action, ownerId] = interaction.customId.split(':');
+  if (interaction.user.id !== ownerId) {
+    return interaction.reply({ content: 'Este boton pertenece a otra persona.', flags: EPHEMERAL });
+  }
+
+  if (action === 'release_device') {
+    const embed = brandEmbed({
+      color: COLORS.danger,
+      title: '⚠️ Confirmar liberacion',
+      description: '¿Estas seguro de que quieres quitar el dispositivo vinculado a tu licencia?'
+    });
+    const buttons = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`release_confirm:${ownerId}`)
+        .setLabel('Si, liberar')
+        .setStyle(ButtonStyle.Danger),
+      new ButtonBuilder()
+        .setCustomId(`release_cancel:${ownerId}`)
+        .setLabel('Cancelar')
+        .setStyle(ButtonStyle.Secondary)
+    );
+    return interaction.update({ embeds: [embed], components: [buttons] });
+  }
+
+  if (action === 'release_cancel') {
+    const embed = brandEmbed({
+      title: 'Liberacion cancelada',
+      description: 'No se hizo ningun cambio en tu licencia.'
+    });
+    return interaction.update({ embeds: [embed], components: [] });
+  }
+
+  if (action === 'release_confirm') {
+    await interaction.deferUpdate();
+    const data = await licenseApi.releaseDevice(interaction.user.id);
+    const embed = brandEmbed({
+      color: data.released ? COLORS.success : COLORS.primary,
+      title: data.released ? '✅ Dispositivo liberado' : 'ℹ️ La licencia ya estaba libre',
+      description: data.released
+        ? `La key \`${data.license.licenseKey}\` ya puede activarse en otro dispositivo.`
+        : 'Tu licencia no tenia ningun dispositivo vinculado.'
+    });
+    return interaction.editReply({ embeds: [embed], components: [] });
+  }
+}
+
 async function sendLog(channelId, embed) {
   if (!channelId) return;
   const channel = await client.channels.fetch(channelId).catch(() => null);
@@ -496,11 +580,15 @@ client.once(Events.ClientReady, async (readyClient) => {
 
 client.on(Events.InteractionCreate, async (interaction) => {
   try {
+    if (interaction.isButton() && interaction.customId.startsWith('release_')) {
+      return await handleReleaseButton(interaction);
+    }
     if (interaction.isChatInputCommand()) {
       if (interaction.commandName === 'canjear') return await handleRedeem(interaction);
       if (interaction.commandName === 'info') return await handleInfo(interaction);
       if (interaction.commandName === 'compra') return await handlePurchase(interaction);
       if (interaction.commandName === 'download') return await handleDownload(interaction);
+      if (interaction.commandName === 'liberar') return await handleReleaseCommand(interaction);
       if (interaction.commandName === 'logs') return await handleLogs(interaction);
     }
   } catch (error) {

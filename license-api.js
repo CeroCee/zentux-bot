@@ -40,6 +40,7 @@ function createLicenseApi({ baseUrl, secret }) {
   return {
     redeem: (payload) => request('/api/discord/redeem', payload),
     info: (discordUserId) => request('/api/discord/info', { discordUserId }),
+    releaseDevice: (discordUserId) => request('/api/discord/release-device', { discordUserId }),
     members: () => request('/api/discord/members'),
     logSettings: (guildId) => request('/api/discord/log-settings', { guildId }),
     setLogChannel: (payload) => request('/api/discord/log-settings/set', payload),
