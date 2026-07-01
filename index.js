@@ -97,6 +97,51 @@ function discordDate(paidUntil) {
   return `<t:${timestamp}:F> (<t:${timestamp}:R>)`;
 }
 
+function formatDiscordDate(value) {
+  if (!value) return 'No disponible';
+  return `<t:${Math.floor(new Date(value).getTime() / 1000)}:F>`;
+}
+
+function paymentMethod(license) {
+  return ({
+    roblox: 'Robux',
+    stripe: 'Stripe',
+    giveaway: 'Regalo',
+    custom: 'Licencia personalizada',
+    paid: 'Compra directa'
+  })[license.source] || 'No disponible';
+}
+
+function licenseOrigin(license) {
+  if (license.source === 'giveaway') return 'Regalada';
+  if (license.source === 'custom') return 'Personalizada';
+  return 'Comprada';
+}
+
+function formatPayment(license) {
+  if (license.source === 'giveaway' || license.source === 'custom') return 'Gratis';
+  if (!Number.isFinite(license.paymentAmount)) return 'No disponible';
+  if (license.paymentCurrency === 'robux') return `${license.paymentAmount.toLocaleString('en-US')} Robux`;
+  const currency = String(license.paymentCurrency || 'usd').toUpperCase();
+  return new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(license.paymentAmount / 100);
+}
+
+function formatPlan(license) {
+  if (!license.durationDays) return 'No disponible';
+  return license.durationDays === 365 ? 'Anual (365 dias)' : `${license.durationDays} dia(s)`;
+}
+
+function purchaseFields(license) {
+  return [
+    { name: 'Comprador original', value: String(license.buyer || 'No disponible'), inline: true },
+    { name: 'Metodo', value: paymentMethod(license), inline: true },
+    { name: 'Importe', value: formatPayment(license), inline: true },
+    { name: 'Plan', value: formatPlan(license), inline: true },
+    { name: 'Tipo', value: licenseOrigin(license), inline: true },
+    { name: 'Canjeada', value: formatDiscordDate(license.redeemedAt), inline: true }
+  ];
+}
+
 async function getGuildAndRole() {
   const guild = client.guilds.cache.get(GUILD_ID) || await client.guilds.fetch(GUILD_ID);
   const role = guild.roles.cache.get(BUYER_ROLE_ID) || await guild.roles.fetch(BUYER_ROLE_ID);
@@ -160,9 +205,11 @@ async function handleRedeem(interaction) {
       .addFields(
         { name: '🟢 Estado', value: '**Activa**', inline: true },
         { name: '⏳ Tiempo restante', value: formatRemaining(license.paidUntil), inline: true },
-        { name: '📅 Fecha de expiracion', value: discordDate(license.paidUntil) }
+        { name: '📅 Fecha de expiracion', value: discordDate(license.paidUntil) },
+        ...purchaseFields(license)
       );
     await interaction.editReply({ embeds: [embed] });
+    await sendLicenseLogs(interaction, license);
   } catch (error) {
     console.error('Error en /canjear:', error.code || error.message);
     await interaction.editReply({ content: licenseErrorMessage(error) });
@@ -196,7 +243,8 @@ async function handleInfo(interaction) {
         { name: '🎟️ Codigo', value: `\`${license.licenseKey}\`` },
         { name: '📊 Estado', value: license.active ? '🟢 Activa' : '🔴 Inactiva o vencida', inline: true },
         { name: '⏳ Tiempo restante', value: formatRemaining(license.paidUntil), inline: true },
-        { name: '📅 Expira', value: discordDate(license.paidUntil) }
+        { name: '📅 Expira', value: discordDate(license.paidUntil) },
+        ...purchaseFields(license)
       );
     await interaction.editReply({ embeds: [embed] });
   } catch (error) {
@@ -256,6 +304,73 @@ async function handleDownload(interaction) {
   });
 }
 
+async function sendLog(channelId, embed) {
+  if (!channelId) return;
+  const channel = await client.channels.fetch(channelId).catch(() => null);
+  if (!channel?.isTextBased()) return;
+  await channel.send({ embeds: [embed] });
+}
+
+async function sendLicenseLogs(interaction, license) {
+  try {
+    const data = await licenseApi.logSettings(interaction.guildId);
+    const config = data.config || {};
+    const purchaseEmbed = brandEmbed({
+      color: COLORS.store,
+      title: '💳 Nueva licencia vinculada',
+      description: `${interaction.user} vinculo una licencia a Discord.`
+    }).addFields(
+      { name: 'Usuario de Discord', value: `${interaction.user.tag}\n\`${interaction.user.id}\`` },
+      { name: 'Codigo', value: `\`${license.licenseKey}\`` },
+      ...purchaseFields(license),
+      { name: 'Vence', value: discordDate(license.paidUntil) }
+    );
+
+    const redemptionEmbed = brandEmbed({
+      color: COLORS.success,
+      title: '✅ Licencia canjeada',
+      description: `${interaction.user} completo un canje de licencia.`
+    }).addFields(
+      { name: 'Canjeada por', value: `${interaction.user.tag}\n\`${interaction.user.id}\`` },
+      { name: 'Codigo', value: `\`${license.licenseKey}\`` },
+      { name: 'Fecha del canje', value: formatDiscordDate(license.redeemedAt), inline: true },
+      { name: 'Duracion', value: formatPlan(license), inline: true },
+      { name: 'Origen', value: licenseOrigin(license), inline: true },
+      { name: 'Vencimiento', value: discordDate(license.paidUntil) }
+    );
+
+    await Promise.all([
+      sendLog(config.purchaseLogChannelId, purchaseEmbed),
+      sendLog(config.redemptionLogChannelId, redemptionEmbed)
+    ]);
+  } catch (error) {
+    console.error('No se pudieron enviar los logs de licencia:', error.code || error.message);
+  }
+}
+
+async function handleLogs(interaction) {
+  if (!interaction.inGuild() || interaction.guildId !== GUILD_ID) {
+    return interaction.reply({ content: 'Este comando solo funciona en el servidor oficial de Zentux.', flags: EPHEMERAL });
+  }
+  if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
+    return interaction.reply({ content: 'Necesitas el permiso Administrador para configurar los logs.', flags: EPHEMERAL });
+  }
+
+  const subcommand = interaction.options.getSubcommand(true);
+  const channel = interaction.options.getChannel('canal', true);
+  const type = subcommand === 'compras' ? 'purchases' : 'redemptions';
+  await interaction.deferReply({ flags: EPHEMERAL });
+  await licenseApi.setLogChannel({ guildId: interaction.guildId, type, channelId: channel.id });
+
+  const label = type === 'purchases' ? 'compras' : 'canjes';
+  const embed = brandEmbed({
+    color: COLORS.success,
+    title: '✅ Canal de logs configurado',
+    description: `Los logs de **${label}** se enviaran a ${channel}.`
+  });
+  await interaction.editReply({ embeds: [embed] });
+}
+
 async function syncBuyerRoles() {
   if (roleSyncRunning) return;
   roleSyncRunning = true;
@@ -311,6 +426,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       if (interaction.commandName === 'info') return await handleInfo(interaction);
       if (interaction.commandName === 'compra') return await handlePurchase(interaction);
       if (interaction.commandName === 'download') return await handleDownload(interaction);
+      if (interaction.commandName === 'logs') return await handleLogs(interaction);
     }
   } catch (error) {
     console.error('Error manejando interaccion:', error);
