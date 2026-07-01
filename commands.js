@@ -40,34 +40,34 @@ const commands = [
       subcommand
         .setName('key')
         .setDescription('Libera tu licencia del dispositivo donde fue utilizada')
+    ),
+  new SlashCommandBuilder()
+    .setName('liberar-admin')
+    .setDescription('Libera la licencia vinculada a otro comprador')
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+    .setDMPermission(false)
+    .addUserOption((option) =>
+      option
+        .setName('usuario')
+        .setDescription('Comprador cuya licencia deseas liberar')
+        .setRequired(true)
+    ),
+  new SlashCommandBuilder()
+    .setName('liberar-access')
+    .setDescription('Concede o retira permiso para liberar licencias ajenas')
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+    .setDMPermission(false)
+    .addUserOption((option) =>
+      option
+        .setName('usuario')
+        .setDescription('Persona que recibira o perdera el permiso')
+        .setRequired(true)
     )
-    .addSubcommand((subcommand) =>
-      subcommand
-        .setName('admin')
-        .setDescription('Libera la licencia vinculada a otro comprador')
-        .addUserOption((option) =>
-          option
-            .setName('usuario')
-            .setDescription('Comprador cuya licencia deseas liberar')
-            .setRequired(true)
-        )
-    )
-    .addSubcommand((subcommand) =>
-      subcommand
-        .setName('access')
-        .setDescription('Concede o retira permiso para liberar licencias ajenas')
-        .addUserOption((option) =>
-          option
-            .setName('usuario')
-            .setDescription('Persona que recibira o perdera el permiso')
-            .setRequired(true)
-        )
-        .addBooleanOption((option) =>
-          option
-            .setName('permitir')
-            .setDescription('true concede acceso; false lo retira')
-            .setRequired(true)
-        )
+    .addBooleanOption((option) =>
+      option
+        .setName('permitir')
+        .setDescription('true concede acceso; false lo retira')
+        .setRequired(true)
     ),
   new SlashCommandBuilder()
     .setName('logs')

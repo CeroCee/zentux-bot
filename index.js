@@ -368,7 +368,11 @@ async function handleReleaseCommand(interaction) {
   }
 
   await interaction.deferReply({ flags: EPHEMERAL });
-  const subcommand = interaction.options.getSubcommand(true);
+  const subcommand = interaction.commandName === 'liberar'
+    ? 'key'
+    : interaction.commandName === 'liberar-admin'
+      ? 'admin'
+      : 'access';
   const callerMember = await interaction.guild.members.fetch(interaction.user.id);
 
   if (subcommand === 'access') {
@@ -744,6 +748,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
       if (interaction.commandName === 'compra') return await handlePurchase(interaction);
       if (interaction.commandName === 'download') return await handleDownload(interaction);
       if (interaction.commandName === 'liberar') return await handleReleaseCommand(interaction);
+      if (interaction.commandName === 'liberar-admin') return await handleReleaseCommand(interaction);
+      if (interaction.commandName === 'liberar-access') return await handleReleaseCommand(interaction);
       if (interaction.commandName === 'generar') return await handleGenerate(interaction);
       if (interaction.commandName === 'logs') return await handleLogs(interaction);
     }
