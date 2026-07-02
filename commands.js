@@ -97,6 +97,36 @@ const commands = [
             .addChannelTypes(ChannelType.GuildText)
             .setRequired(true)
         )
+    )
+    .addSubcommand((subcommand) =>
+      subcommand
+        .setName('generacion')
+        .setDescription('Canal para keys generadas, reactivadas y borradas')
+        .addChannelOption((option) =>
+          option
+            .setName('canal')
+            .setDescription('Canal donde se enviara la auditoria de keys')
+            .addChannelTypes(ChannelType.GuildText)
+            .setRequired(true)
+        )
+    ),
+  new SlashCommandBuilder()
+    .setName('borrar')
+    .setDescription('Elimina licencias del sistema de Zentux')
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+    .setDMPermission(false)
+    .addSubcommand((subcommand) =>
+      subcommand
+        .setName('key')
+        .setDescription('Borra una o varias keys, separadas por comas')
+        .addStringOption((option) =>
+          option
+            .setName('keys')
+            .setDescription('KEY1, KEY2, KEY3...')
+            .setRequired(true)
+            .setMinLength(10)
+            .setMaxLength(4000)
+        )
     ),
   new SlashCommandBuilder()
     .setName('generar')

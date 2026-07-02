@@ -1,4 +1,5 @@
 require('dotenv').config();
+const crypto = require('node:crypto');
 const {
   ActionRowBuilder,
   ButtonBuilder,
@@ -53,6 +54,8 @@ const redeemAttempts = new Map();
 let roleSyncRunning = false;
 let purchaseSyncRunning = false;
 let contentCreatorSyncRunning = false;
+let licenseEventSyncRunning = false;
+const pendingLicenseDeletes = new Map();
 
 function brandEmbed({ color = COLORS.primary, title, description }) {
   return new EmbedBuilder()
@@ -508,6 +511,89 @@ async function handleReleaseButton(interaction) {
   }
 }
 
+function parseLicenseKeys(value) {
+  return [...new Set(
+    String(value || '')
+      .split(/[,;\r\n]+/)
+      .map((key) => key.trim().replace(/^['"]|['"]$/g, '').toUpperCase())
+      .filter(Boolean)
+  )];
+}
+
+async function handleDeleteCommand(interaction) {
+  if (!interaction.inGuild() || interaction.guildId !== GUILD_ID) {
+    return interaction.reply({ content: 'Este comando solo funciona en el servidor oficial de Zentux.', flags: EPHEMERAL });
+  }
+  if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
+    return interaction.reply({ content: 'Solo los administradores pueden borrar licencias.', flags: EPHEMERAL });
+  }
+
+  const keys = parseLicenseKeys(interaction.options.getString('keys', true));
+  if (keys.length === 0 || keys.length > 100) {
+    return interaction.reply({ content: 'Escribe entre 1 y 100 keys validas, separadas por comas.', flags: EPHEMERAL });
+  }
+
+  const token = crypto.randomBytes(12).toString('hex');
+  pendingLicenseDeletes.set(token, {
+    ownerId: interaction.user.id,
+    keys,
+    expiresAt: Date.now() + 5 * 60 * 1000
+  });
+  const preview = keys.slice(0, 10).map((key) => `\`${key}\``).join('\n');
+  const extra = keys.length > 10 ? `\n...y ${keys.length - 10} mas.` : '';
+  const embed = brandEmbed({
+    color: COLORS.danger,
+    title: 'Confirmar borrado de licencias',
+    description: `Vas a borrar **${keys.length}** licencia(s) permanentemente:\n\n${preview}${extra}\n\nEsta accion desactivara las keys inmediatamente.`
+  });
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`delete_confirm:${token}`)
+      .setLabel(`Borrar ${keys.length} key(s)`)
+      .setStyle(ButtonStyle.Danger),
+    new ButtonBuilder()
+      .setCustomId(`delete_cancel:${token}`)
+      .setLabel('Cancelar')
+      .setStyle(ButtonStyle.Secondary)
+  );
+  return interaction.reply({ embeds: [embed], components: [row], flags: EPHEMERAL });
+}
+
+async function handleDeleteButton(interaction) {
+  const [action, token] = interaction.customId.split(':');
+  const pending = pendingLicenseDeletes.get(token);
+  if (!pending || pending.expiresAt < Date.now()) {
+    pendingLicenseDeletes.delete(token);
+    return interaction.reply({ content: 'Esta confirmacion ya vencio. Usa `/borrar key` nuevamente.', flags: EPHEMERAL });
+  }
+  if (pending.ownerId !== interaction.user.id || !interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
+    return interaction.reply({ content: 'No puedes confirmar esta operacion.', flags: EPHEMERAL });
+  }
+  if (action === 'delete_cancel') {
+    pendingLicenseDeletes.delete(token);
+    return interaction.update({ content: 'Borrado cancelado.', embeds: [], components: [] });
+  }
+
+  await interaction.deferUpdate();
+  pendingLicenseDeletes.delete(token);
+  const data = await licenseApi.deleteLicenses({
+    licenseKeys: pending.keys,
+    deletedBy: `Discord: ${interaction.user.tag} (${interaction.user.id})`
+  });
+  const missing = data.requested - data.deleted;
+  const embed = brandEmbed({
+    color: data.deleted > 0 ? COLORS.success : COLORS.danger,
+    title: data.deleted > 0 ? 'Licencias borradas' : 'No se encontraron licencias',
+    description: [
+      `**Solicitadas:** ${data.requested}`,
+      `**Borradas:** ${data.deleted}`,
+      `**No encontradas:** ${missing}`
+    ].join('\n')
+  });
+  await interaction.editReply({ embeds: [embed], components: [] });
+  await syncLicenseEventLogs();
+}
+
 async function handleGenerate(interaction) {
   if (!interaction.inGuild() || interaction.guildId !== GUILD_ID) {
     return interaction.reply({ content: 'Este comando solo funciona en el servidor oficial de Zentux.', flags: EPHEMERAL });
@@ -628,11 +714,15 @@ async function handleLogs(interaction) {
 
   const subcommand = interaction.options.getSubcommand(true);
   const channel = interaction.options.getChannel('canal', true);
-  const type = subcommand === 'compras' ? 'purchases' : 'redemptions';
+  const type = subcommand === 'compras'
+    ? 'purchases'
+    : subcommand === 'generacion'
+      ? 'generation'
+      : 'redemptions';
   await interaction.deferReply({ flags: EPHEMERAL });
   await licenseApi.setLogChannel({ guildId: interaction.guildId, type, channelId: channel.id });
 
-  const label = type === 'purchases' ? 'compras' : 'canjes';
+  const label = type === 'purchases' ? 'compras' : type === 'generation' ? 'generacion y borrado de keys' : 'canjes';
   const embed = brandEmbed({
     color: COLORS.success,
     title: '✅ Canal de logs configurado',
@@ -640,6 +730,66 @@ async function handleLogs(interaction) {
   });
   await interaction.editReply({ embeds: [embed] });
   if (type === 'purchases') await syncPurchaseLogs();
+  if (type === 'generation') await syncLicenseEventLogs();
+}
+
+async function syncLicenseEventLogs() {
+  if (licenseEventSyncRunning) return;
+  licenseEventSyncRunning = true;
+  try {
+    const settings = await licenseApi.logSettings(GUILD_ID);
+    const channelId = settings.config?.generationLogChannelId;
+    if (!channelId) return;
+
+    const channel = await client.channels.fetch(channelId).catch(() => null);
+    if (!channel?.isTextBased()) return;
+    const data = await licenseApi.pendingLicenseEvents(GUILD_ID);
+    const deliveredIds = [];
+
+    for (const event of data.events || []) {
+      const license = event.metadata || {};
+      const isDeleted = event.eventType === 'deleted';
+      const isReactivated = event.eventType === 'reactivated';
+      const title = isDeleted
+        ? 'Licencia borrada'
+        : isReactivated
+          ? 'Licencia reactivada'
+          : 'Licencia generada';
+      const embed = brandEmbed({
+        color: isDeleted ? COLORS.danger : isReactivated ? COLORS.store : COLORS.success,
+        title,
+        description: `Evento registrado por el sistema de licencias Zentux.`
+      }).addFields(
+        { name: 'Key', value: `\`${event.licenseKey}\`` },
+        { name: 'Origen', value: paymentMethod(license), inline: true },
+        { name: 'Plan', value: formatPlan(license), inline: true },
+        { name: 'Importe', value: formatPayment(license), inline: true },
+        { name: 'Comprador / referencia', value: String(license.buyer || license.discordUsername || 'No disponible'), inline: true },
+        { name: 'Estado anterior', value: String(license.status || 'No disponible'), inline: true },
+        { name: 'Fecha del evento', value: formatDiscordDate(event.createdAt), inline: true },
+        { name: 'Vencimiento', value: discordDate(license.paidUntil), inline: false }
+      );
+      if (isDeleted) {
+        embed.addFields({ name: 'Borrada por', value: String(license.deletedBy || 'Sistema') });
+      }
+      try {
+        await channel.send({ embeds: [embed] });
+        deliveredIds.push(event.id);
+      } catch (error) {
+        console.error(`No se pudo enviar el evento de licencia ${event.id}:`, error.message);
+        break;
+      }
+    }
+
+    if (deliveredIds.length > 0) {
+      await licenseApi.acknowledgeLicenseEvents(GUILD_ID, deliveredIds);
+      console.log(`Logs de generacion enviados: ${deliveredIds.length}.`);
+    }
+  } catch (error) {
+    console.error('No se pudieron sincronizar los logs de generacion:', error.code || error.message);
+  } finally {
+    licenseEventSyncRunning = false;
+  }
 }
 
 async function syncPurchaseLogs() {
@@ -731,9 +881,11 @@ client.once(Events.ClientReady, async (readyClient) => {
   }
   await syncBuyerRoles();
   await syncPurchaseLogs();
+  await syncLicenseEventLogs();
   await syncContentCreatorLicenses();
   setInterval(syncBuyerRoles, SYNC_MINUTES * 60 * 1000).unref();
   setInterval(syncPurchaseLogs, PURCHASE_SYNC_SECONDS * 1000).unref();
+  setInterval(syncLicenseEventLogs, PURCHASE_SYNC_SECONDS * 1000).unref();
   setInterval(syncContentCreatorLicenses, SYNC_MINUTES * 60 * 1000).unref();
 });
 
@@ -741,6 +893,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
   try {
     if (interaction.isButton() && interaction.customId.startsWith('release_')) {
       return await handleReleaseButton(interaction);
+    }
+    if (interaction.isButton() && interaction.customId.startsWith('delete_')) {
+      return await handleDeleteButton(interaction);
     }
     if (interaction.isChatInputCommand()) {
       if (interaction.commandName === 'canjear') return await handleRedeem(interaction);
@@ -752,6 +907,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       if (interaction.commandName === 'liberar-access') return await handleReleaseCommand(interaction);
       if (interaction.commandName === 'generar') return await handleGenerate(interaction);
       if (interaction.commandName === 'logs') return await handleLogs(interaction);
+      if (interaction.commandName === 'borrar') return await handleDeleteCommand(interaction);
     }
   } catch (error) {
     console.error('Error manejando interaccion:', error);
