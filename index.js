@@ -11,6 +11,7 @@ const {
   Events,
   GatewayIntentBits,
   MessageFlags,
+  Partials,
   PermissionFlagsBits
 } = require('discord.js');
 const config = require('./config.json');
@@ -56,7 +57,15 @@ const licenseApi = createLicenseApi({
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildVoiceStates
+    GatewayIntentBits.GuildVoiceStates,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.GuildMessageReactions
+  ],
+  partials: [
+    Partials.User,
+    Partials.Channel,
+    Partials.Message,
+    Partials.Reaction
   ]
 });
 

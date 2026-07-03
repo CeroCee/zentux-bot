@@ -1,6 +1,7 @@
 const { Events } = require('discord.js');
 const config = require('../config.json');
-const { addCoins } = require('../database/db');
+const { db, addCoins } = require('../database/db');
+const { checkQuests } = require('./reactionsAndQuests');
 
 const CHECK_INTERVAL_MS = 10 * 60 * 1000;
 const VOICE_REWARD = 20;
@@ -8,6 +9,11 @@ const VOICE_REWARD_REASON = 'Voice Grind: 10 minutos activos';
 
 const eligibleSince = new Map();
 const registeredClients = new WeakSet();
+
+const rewardVoiceTransaction = db.transaction((userId) => {
+  addCoins(userId, VOICE_REWARD, VOICE_REWARD_REASON);
+  checkQuests(userId, 'voice');
+});
 
 function authorizedChannelIds() {
   return new Set(
@@ -92,7 +98,7 @@ async function checkVoiceRewards(client, allowedChannels, now = Date.now()) {
       if (now - startedAt < CHECK_INTERVAL_MS) continue;
 
       try {
-        addCoins(member.id, VOICE_REWARD, VOICE_REWARD_REASON);
+        rewardVoiceTransaction(member.id);
         eligibleSince.set(key, now);
         rewardedUsers += 1;
       } catch (error) {
