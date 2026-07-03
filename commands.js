@@ -3,7 +3,9 @@ const { ChannelType, PermissionFlagsBits, SlashCommandBuilder } = require('disco
 const economyCommandModules = [
   require('./commands/coins'),
   require('./commands/daily'),
-  require('./commands/transfer')
+  require('./commands/transfer'),
+  require('./commands/shop'),
+  require('./commands/redeem')
 ];
 
 const commands = [

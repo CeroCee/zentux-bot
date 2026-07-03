@@ -12,11 +12,13 @@ const {
   GatewayIntentBits,
   MessageFlags,
   Partials,
-  PermissionFlagsBits
+  PermissionFlagsBits,
+  REST,
+  Routes
 } = require('discord.js');
 const config = require('./config.json');
 const database = require('./database/db');
-const { economyCommandModules } = require('./commands');
+const { commands, economyCommandModules } = require('./commands');
 const { createLicenseApi, LicenseApiError } = require('./license-api');
 
 const requiredEnvironment = [
@@ -28,6 +30,8 @@ const requiredEnvironment = [
 const missingEnvironment = requiredEnvironment.filter((name) => !process.env[name]);
 const TOKEN = process.env.DISCORD_TOKEN || config.token;
 if (!TOKEN) missingEnvironment.unshift('DISCORD_TOKEN o config.token');
+const CLIENT_ID = process.env.CLIENT_ID || config.clientId;
+if (!CLIENT_ID) missingEnvironment.unshift('CLIENT_ID o config.clientId');
 if (missingEnvironment.length > 0) {
   console.error(`Faltan variables de entorno: ${missingEnvironment.join(', ')}`);
   process.exit(1);
@@ -106,6 +110,13 @@ let purchaseSyncRunning = false;
 let contentCreatorSyncRunning = false;
 let licenseEventSyncRunning = false;
 const pendingLicenseDeletes = new Map();
+
+async function syncApplicationCommands() {
+  const rest = new REST({ version: '10' }).setToken(TOKEN);
+  const body = commands.map((command) => command.toJSON());
+  await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body });
+  console.log(`${body.length} comandos de Discord sincronizados.`);
+}
 
 function brandEmbed({ color = COLORS.primary, title, description }) {
   return new EmbedBuilder()
@@ -917,6 +928,7 @@ async function syncBuyerRoles() {
 
 client.once(Events.ClientReady, async (readyClient) => {
   console.log(`Bot listo como ${readyClient.user.tag}`);
+  await syncApplicationCommands();
   readyClient.user.setPresence({
     activities: [{ name: '/download | /compra' }],
     status: 'online'
@@ -948,7 +960,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
     if (interaction.isChatInputCommand()) {
       const economyCommand = economyCommands.get(interaction.commandName);
-      if (economyCommand) return await economyCommand.execute(interaction);
+      if (economyCommand) return await economyCommand.execute(interaction, { licenseApi });
       if (interaction.commandName === 'canjear') return await handleRedeem(interaction);
       if (interaction.commandName === 'info') return await handleInfo(interaction);
       if (interaction.commandName === 'compra') return await handlePurchase(interaction);
