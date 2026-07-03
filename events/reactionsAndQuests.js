@@ -74,6 +74,12 @@ const getReactionEarningsQuery = db.prepare(`
     AND DATE(timestamp) = ?
 `);
 
+const claimReactionQuery = db.prepare(`
+  INSERT INTO reaction_claims (userId, messageId)
+  VALUES (?, ?)
+  ON CONFLICT(userId, messageId) DO NOTHING
+`);
+
 function currentDate() {
   return new Date().toISOString().slice(0, 10);
 }
@@ -149,15 +155,23 @@ function checkQuests(userId, type) {
   return checkQuestsTransaction(userId, type);
 }
 
-const rewardReactionTransaction = db.transaction((userId) => {
+const rewardReactionTransaction = db.transaction((userId, messageId) => {
   const normalizedUserId = normalizeUserId(userId);
+  const normalizedMessageId = String(messageId || '').trim();
+  if (!normalizedMessageId) throw new TypeError('messageId es obligatorio.');
+
+  const claim = claimReactionQuery.run(normalizedUserId, normalizedMessageId);
+  if (claim.changes !== 1) {
+    return { rewarded: false, duplicate: true, earned: null, quest: null };
+  }
+
   const date = currentDate();
   const earned = Number(
     getReactionEarningsQuery.get(normalizedUserId, REACTION_REASON, date).total
   );
 
   if (earned >= MAX_DAILY_REACTION_REWARD) {
-    return { rewarded: false, earned, quest: null };
+    return { rewarded: false, duplicate: false, earned, quest: null };
   }
 
   addCoins(normalizedUserId, REACTION_REWARD, REACTION_REASON);
@@ -165,12 +179,26 @@ const rewardReactionTransaction = db.transaction((userId) => {
 
   return {
     rewarded: true,
+    duplicate: false,
     earned: earned + REACTION_REWARD,
     quest
   };
 });
 
-async function handleReaction(reaction, user, announcementChannelId) {
+function parseRewardsStartAt(value) {
+  const timestamp = Date.parse(String(value || '').trim());
+  if (!Number.isFinite(timestamp)) {
+    throw new TypeError('reactionRewardsStartAt no contiene una fecha valida.');
+  }
+  return timestamp;
+}
+
+function isMessageEligible(message, rewardsStartAt) {
+  return Number.isFinite(message?.createdTimestamp)
+    && message.createdTimestamp >= rewardsStartAt;
+}
+
+async function handleReaction(reaction, user, announcementChannelId, rewardsStartAt) {
   if (!announcementChannelId) return;
 
   if (user.partial) {
@@ -191,8 +219,9 @@ async function handleReaction(reaction, user, announcementChannelId) {
   }
 
   if (reaction.message.channelId !== announcementChannelId) return;
+  if (!isMessageEligible(reaction.message, rewardsStartAt)) return;
 
-  const result = rewardReactionTransaction(user.id);
+  const result = rewardReactionTransaction(user.id, reaction.message.id);
   if (result.quest?.comboAwarded) {
     console.log(`Combo diario otorgado a ${user.id}: +${COMBO_REWARD} ZCoins.`);
   }
@@ -207,9 +236,14 @@ function register(client) {
       || config.announcementChannelId
       || ''
   ).trim();
+  const rewardsStartAt = parseRewardsStartAt(
+    process.env.REACTION_REWARDS_START_AT
+      || config.reactionRewardsStartAt
+      || '2026-07-02T00:00:00-04:00'
+  );
 
   client.on(Events.MessageReactionAdd, (reaction, user) => {
-    handleReaction(reaction, user, announcementChannelId).catch((error) => {
+    handleReaction(reaction, user, announcementChannelId, rewardsStartAt).catch((error) => {
       console.error('Error procesando reaccion de anuncios:', error);
     });
   });
@@ -225,5 +259,8 @@ module.exports = {
   name: Events.MessageReactionAdd,
   register,
   checkQuests,
-  DAILY_QUESTS
+  DAILY_QUESTS,
+  rewardReactionTransaction,
+  parseRewardsStartAt,
+  isMessageEligible
 };

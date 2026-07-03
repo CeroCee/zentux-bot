@@ -2,6 +2,7 @@
   "token": "",
   "clientId": "",
   "announcementChannelId": "1392616236268912680",
+  "reactionRewardsStartAt": "2026-07-02T00:00:00-04:00",
   "authorizedVoiceChannels": [
     "1517697290117185575",
     "1517701776344617061"

@@ -42,6 +42,13 @@ db.exec(`
     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
   );
 
+  CREATE TABLE IF NOT EXISTS reaction_claims (
+    userId TEXT NOT NULL,
+    messageId TEXT NOT NULL,
+    claimed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (userId, messageId)
+  );
+
   CREATE INDEX IF NOT EXISTS idx_quests_user_date
   ON quests (userId, date);
 
@@ -50,6 +57,9 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_coin_logs_timestamp
   ON coin_logs (timestamp);
+
+  CREATE INDEX IF NOT EXISTS idx_reaction_claims_message
+  ON reaction_claims (messageId);
 `);
 
 const queries = {
