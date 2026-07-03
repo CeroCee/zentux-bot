@@ -26,7 +26,13 @@ async function execute(interaction) {
     })
     .setTitle('Balance de Zentux')
     .addFields(
-      { name: 'ZCoins', value: `🪙 **${user.zcoins.toLocaleString('es-ES')}**`, inline: true },
+      { name: 'Bolsillo', value: `🪙 **${user.zcoins.toLocaleString('es-ES')}**`, inline: true },
+      { name: 'Banco protegido', value: `🏦 **${user.bank.toLocaleString('es-ES')}**`, inline: true },
+      {
+        name: 'Total',
+        value: `💰 **${(user.zcoins + user.bank).toLocaleString('es-ES')}**`,
+        inline: true
+      },
       { name: 'Racha diaria', value: `🔥 **${user.streak_days} día(s)**`, inline: true },
       { name: 'Nivel', value: `⭐ **${user.level}**`, inline: true },
       { name: 'Experiencia', value: `✨ **${user.xp}/${requiredXp} XP**\n${progressBar}` }

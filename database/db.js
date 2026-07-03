@@ -19,6 +19,7 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS users (
     userId TEXT PRIMARY KEY,
     zcoins INTEGER NOT NULL DEFAULT 0,
+    bank INTEGER NOT NULL DEFAULT 0,
     level INTEGER NOT NULL DEFAULT 1,
     xp INTEGER NOT NULL DEFAULT 0,
     streak_days INTEGER NOT NULL DEFAULT 0,
@@ -57,6 +58,11 @@ db.exec(`
     timestamp DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
 
+  CREATE TABLE IF NOT EXISTS rob_cooldowns (
+    userId TEXT PRIMARY KEY,
+    last_rob_at TEXT NOT NULL
+  );
+
   CREATE INDEX IF NOT EXISTS idx_quests_user_date
   ON quests (userId, date);
 
@@ -72,6 +78,11 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_xp_logs_user
   ON xp_logs (userId);
 `);
+
+const userColumns = db.pragma('table_info(users)');
+if (!userColumns.some((column) => column.name === 'bank')) {
+  db.exec('ALTER TABLE users ADD COLUMN bank INTEGER NOT NULL DEFAULT 0;');
+}
 
 const queries = {
   getUser: db.prepare(`
@@ -90,6 +101,18 @@ const queries = {
     UPDATE users
     SET zcoins = zcoins + ?
     WHERE userId = ?
+  `),
+
+  depositCoins: db.prepare(`
+    UPDATE users
+    SET zcoins = zcoins - ?, bank = bank + ?
+    WHERE userId = ? AND zcoins >= ?
+  `),
+
+  withdrawCoins: db.prepare(`
+    UPDATE users
+    SET bank = bank - ?, zcoins = zcoins + ?
+    WHERE userId = ? AND bank >= ?
   `),
 
   updateXp: db.prepare(`
@@ -191,6 +214,63 @@ function addCoins(userId, amount, reason = 'Sin especificar') {
   return addCoinsTransaction(userId, amount, reason);
 }
 
+function resolveBankAmount(value, available) {
+  if (String(value).trim().toLowerCase() === 'all') {
+    if (available <= 0) {
+      const error = new Error('No hay fondos disponibles.');
+      error.code = 'NO_FUNDS';
+      throw error;
+    }
+    return available;
+  }
+
+  const amount = Number(value);
+  if (!Number.isSafeInteger(amount) || amount <= 0) {
+    const error = new TypeError('La cantidad debe ser un entero positivo o "all".');
+    error.code = 'INVALID_AMOUNT';
+    throw error;
+  }
+  return amount;
+}
+
+const depositCoinsTransaction = db.transaction((userId, value) => {
+  const normalizedUserId = validateUserId(userId);
+  queries.createUser.run(normalizedUserId);
+  const current = queries.getUser.get(normalizedUserId);
+  const amount = resolveBankAmount(value, current.zcoins);
+  const result = queries.depositCoins.run(amount, amount, normalizedUserId, amount);
+  if (result.changes !== 1) {
+    const error = new Error('Saldo insuficiente en el bolsillo.');
+    error.code = 'INSUFFICIENT_POCKET';
+    throw error;
+  }
+  queries.registerCoinLog.run(normalizedUserId, -amount, 'Depósito al banco');
+  return { amount, user: queries.getUser.get(normalizedUserId) };
+});
+
+const withdrawCoinsTransaction = db.transaction((userId, value) => {
+  const normalizedUserId = validateUserId(userId);
+  queries.createUser.run(normalizedUserId);
+  const current = queries.getUser.get(normalizedUserId);
+  const amount = resolveBankAmount(value, current.bank);
+  const result = queries.withdrawCoins.run(amount, amount, normalizedUserId, amount);
+  if (result.changes !== 1) {
+    const error = new Error('Saldo insuficiente en el banco.');
+    error.code = 'INSUFFICIENT_BANK';
+    throw error;
+  }
+  queries.registerCoinLog.run(normalizedUserId, amount, 'Retiro del banco');
+  return { amount, user: queries.getUser.get(normalizedUserId) };
+});
+
+function depositCoins(userId, amount) {
+  return depositCoinsTransaction(userId, amount);
+}
+
+function withdrawCoins(userId, amount) {
+  return withdrawCoinsTransaction(userId, amount);
+}
+
 function xpForNextLevel(level) {
   const normalizedLevel = Math.max(1, Number.parseInt(level, 10) || 1);
   return normalizedLevel * 100;
@@ -255,6 +335,8 @@ module.exports = {
   getUser,
   getOrCreateUser,
   addCoins,
+  depositCoins,
+  withdrawCoins,
   addXp,
   xpForNextLevel,
   registerCoinLog,

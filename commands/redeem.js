@@ -1,20 +1,24 @@
-const crypto = require('node:crypto');
 const { EmbedBuilder, MessageFlags, SlashCommandBuilder } = require('discord.js');
 const { db, queries, addCoins } = require('../database/db');
-const { SHOP_ITEMS } = require('./shop');
+const { SHOP_ITEMS, KEY_HOURS } = require('./shop');
+
+const itemChoices = [
+  ...KEY_HOURS.map((hours) => {
+    const item = SHOP_ITEMS[`key_${hours}h`];
+    return { name: `${item.name} — ${item.price} ZCoins`, value: item.id };
+  }),
+  { name: 'Protector de Racha — 150 ZCoins', value: 'streak_protector' }
+];
 
 const data = new SlashCommandBuilder()
   .setName('redeem')
-  .setDescription('Compra un artículo de la tienda con ZCoins')
+  .setDescription('Compra una Key o un protector con ZCoins del bolsillo')
   .addStringOption((option) =>
     option
       .setName('item_id')
-      .setDescription('ID del artículo que deseas comprar')
+      .setDescription('Artículo que deseas comprar')
       .setRequired(true)
-      .addChoices(
-        { name: 'Caja Misteriosa — 250 ZCoins', value: 'mystery_box' },
-        { name: 'Protector de Racha — 150 ZCoins', value: 'streak_protector' }
-      )
+      .addChoices(...itemChoices)
   );
 
 const debitCoinsQuery = db.prepare(`
@@ -26,122 +30,83 @@ const addProtectorQuery = db.prepare(`
   WHERE userId = ?
 `);
 
-function insufficientFundsError() {
-  const error = new Error('Saldo insuficiente.');
-  error.code = 'INSUFFICIENT_FUNDS';
+function shopError(code, message) {
+  const error = new Error(message);
+  error.code = code;
   return error;
 }
 
-const purchaseProtectorTransaction = db.transaction((userId) => {
-  const item = SHOP_ITEMS.streak_protector;
+const chargeItemTransaction = db.transaction((userId, itemId) => {
+  const item = SHOP_ITEMS[itemId];
+  if (!item) throw shopError('UNKNOWN_ITEM', 'Ese artículo no existe.');
   queries.createUser.run(userId);
   const debit = debitCoinsQuery.run(item.price, userId, item.price);
-  if (debit.changes !== 1) throw insufficientFundsError();
-  addProtectorQuery.run(userId);
-  queries.registerCoinLog.run(userId, -item.price, 'Compra: Protector de Racha');
-  return queries.getUser.get(userId);
-});
-
-const purchaseMysteryBoxTransaction = db.transaction((userId) => {
-  const item = SHOP_ITEMS.mystery_box;
-  queries.createUser.run(userId);
-  const debit = debitCoinsQuery.run(item.price, userId, item.price);
-  if (debit.changes !== 1) throw insufficientFundsError();
-  queries.registerCoinLog.run(userId, -item.price, 'Compra: Caja Misteriosa');
-  return queries.getUser.get(userId);
-});
-
-function selectPrize(roll = crypto.randomInt(10_000)) {
-  if (!Number.isInteger(roll) || roll < 0 || roll >= 10_000) {
-    throw new RangeError('El roll debe ser un entero entre 0 y 9999.');
+  if (debit.changes !== 1) {
+    throw shopError('INSUFFICIENT_FUNDS', 'Saldo insuficiente en el bolsillo.');
   }
-  if (roll < 6_000) return { hours: 1, chance: '60%', jackpot: false };
-  if (roll < 8_500) return { hours: 3, chance: '25%', jackpot: false };
-  if (roll < 9_500) return { hours: 5, chance: '10%', jackpot: false };
-  if (roll < 9_950) return { hours: 10, chance: '4.5%', jackpot: false };
-  return { hours: 12, chance: '0.5%', jackpot: true };
+  if (item.type === 'protector') addProtectorQuery.run(userId);
+  queries.registerCoinLog.run(userId, -item.price, `Compra: ${item.name}`);
+  return { item, user: queries.getUser.get(userId) };
+});
+
+function chargeItem(userId, itemId) {
+  return chargeItemTransaction(String(userId), String(itemId));
 }
 
-function purchaseProtector(userId) {
-  return purchaseProtectorTransaction(String(userId));
-}
-
-function purchaseMysteryBox(userId) {
-  return purchaseMysteryBoxTransaction(String(userId));
-}
-
-function refundMysteryBox(userId) {
+function refundItem(userId, item) {
   return addCoins(
     String(userId),
-    SHOP_ITEMS.mystery_box.price,
-    'Reembolso: no se pudo generar la Key de la Caja Misteriosa'
+    item.price,
+    `Reembolso: no se pudo generar ${item.name}`
   ).user;
 }
 
-function suspenseEmbed() {
-  return new EmbedBuilder()
-    .setColor(0xf59e0b)
-    .setTitle('🎁 Abriendo tu Caja Misteriosa...')
-    .setDescription('La caja está temblando... ¿será el Jackpot? ✨')
-    .setFooter({ text: 'Calculando tu premio de forma segura' });
-}
-
 async function buyProtector(interaction) {
-  const user = purchaseProtector(interaction.user.id);
+  const { item, user } = chargeItem(interaction.user.id, 'streak_protector');
   const embed = new EmbedBuilder()
     .setColor(0x22c55e)
     .setTitle('🛡️ Protector comprado')
-    .setDescription('Tu Protector de Racha ya está guardado y se usará automáticamente.')
+    .setDescription('Se guardó correctamente y se usará automáticamente cuando sea necesario.')
     .addFields(
-      { name: 'Protectores disponibles', value: String(user.streak_protector), inline: true },
-      { name: 'Balance', value: `🪙 ${user.zcoins.toLocaleString('es-ES')} ZCoins`, inline: true }
+      { name: 'Precio', value: `🪙 ${item.price} ZCoins`, inline: true },
+      { name: 'Protectores', value: String(user.streak_protector), inline: true },
+      { name: 'Bolsillo', value: `🪙 ${user.zcoins.toLocaleString('es-ES')}`, inline: true }
     )
     .setTimestamp();
   await interaction.editReply({ embeds: [embed] });
 }
 
-async function buyMysteryBox(interaction, licenseApi) {
-  purchaseMysteryBox(interaction.user.id);
-  await interaction.editReply({ embeds: [suspenseEmbed()] });
-  const prize = selectPrize();
+async function buyKey(interaction, item, licenseApi) {
+  chargeItem(interaction.user.id, item.id);
   let licenseGenerated = false;
-
   try {
-    const [result] = await Promise.all([
-      licenseApi.generateGiveaway({
-        hours: prize.hours,
-        count: 1,
-        createdBy: interaction.user.id,
-        source: 'mystery_box'
-      }),
-      new Promise((resolve) => setTimeout(resolve, 1_200))
-    ]);
+    const result = await licenseApi.generateGiveaway({
+      hours: item.hours,
+      count: 1,
+      createdBy: interaction.user.id,
+      source: `shop_${item.id}`
+    });
     const licenseKey = result?.licenses?.[0]?.licenseKey;
     if (!licenseKey) throw new Error('El servidor no devolvió una Key válida.');
     licenseGenerated = true;
-
-    const user = prize.jackpot
-      ? addCoins(interaction.user.id, 500, 'Jackpot Caja Misteriosa: devolución de 500 ZCoins').user
-      : queries.getUser.get(interaction.user.id);
-    const prizeText = prize.jackpot
-      ? `Ganaste una **Key de 12 horas** y recuperaste **500 ZCoins**.`
-      : `Ganaste una **Key de ${prize.hours} hora${prize.hours === 1 ? '' : 's'}**.`;
+    const user = queries.getUser.get(interaction.user.id);
 
     const embed = new EmbedBuilder()
-      .setColor(prize.jackpot ? 0xfacc15 : 0x7c3aed)
-      .setTitle(prize.jackpot ? '🏆 ¡JACKPOT!' : '🔑 ¡Tu premio está listo!')
-      .setDescription(`${prizeText}\n\nTu Key privada:\n\`${licenseKey}\``)
-      .addFields(
-        { name: 'Probabilidad', value: prize.chance, inline: true },
-        { name: 'Balance', value: `🪙 ${user.zcoins.toLocaleString('es-ES')} ZCoins`, inline: true },
-        { name: 'Cómo activarla', value: 'Usa `/canjear codigo:<KEY>`. Este mensaje solo es visible para ti.' }
+      .setColor(0x22c55e)
+      .setTitle('🔑 Compra completada')
+      .setDescription(
+        `Compraste una **Key de ${item.hours} hora${item.hours === 1 ? '' : 's'}**.\n\nTu Key privada:\n\`${licenseKey}\``
       )
-      .setFooter({ text: 'Guarda tu Key y no la compartas' })
+      .addFields(
+        { name: 'Precio', value: `🪙 ${item.price.toLocaleString('es-ES')} ZCoins`, inline: true },
+        { name: 'Bolsillo restante', value: `🪙 ${user.zcoins.toLocaleString('es-ES')}`, inline: true },
+        { name: 'Activación', value: 'Usa `/canjear codigo:<KEY>` y no compartas esta Key.' }
+      )
       .setTimestamp();
     await interaction.editReply({ embeds: [embed] });
   } catch (error) {
     if (!licenseGenerated) {
-      refundMysteryBox(interaction.user.id);
+      refundItem(interaction.user.id, item);
       error.purchaseRefunded = true;
     }
     throw error;
@@ -150,26 +115,32 @@ async function buyMysteryBox(interaction, licenseApi) {
 
 async function execute(interaction, { licenseApi } = {}) {
   const itemId = interaction.options.getString('item_id', true);
+  const item = SHOP_ITEMS[itemId];
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
   try {
-    if (itemId === SHOP_ITEMS.streak_protector.id) {
+    if (!item) throw shopError('UNKNOWN_ITEM', 'Ese artículo no existe.');
+    if (item.type === 'protector') {
       await buyProtector(interaction);
       return;
     }
-    if (itemId === SHOP_ITEMS.mystery_box.id) {
-      if (!licenseApi) throw new Error('El servicio de licencias no está configurado.');
-      await buyMysteryBox(interaction, licenseApi);
-      return;
-    }
-    await interaction.editReply({ content: 'Ese artículo no existe. Usa `/shop` para ver los IDs.' });
+    if (!licenseApi) throw new Error('El servicio de licencias no está configurado.');
+    await buyKey(interaction, item, licenseApi);
   } catch (error) {
     if (error.code === 'INSUFFICIENT_FUNDS') {
-      await interaction.editReply({ content: 'No tienes suficientes ZCoins. Consulta tu balance con `/coins`.', embeds: [] });
+      await interaction.editReply({
+        content: 'No tienes suficientes ZCoins en el bolsillo. Retira fondos con `/bank withdraw` si tienes dinero guardado.',
+        embeds: []
+      });
+      return;
+    }
+    if (error.code === 'UNKNOWN_ITEM') {
+      await interaction.editReply({ content: 'Ese artículo ya no existe. Consulta `/shop`.', embeds: [] });
       return;
     }
     if (error.purchaseRefunded) {
       await interaction.editReply({
-        content: 'No se pudo generar tu Key. Tus 250 ZCoins fueron reembolsados automáticamente; inténtalo de nuevo más tarde.',
+        content: `No se pudo generar la Key. Se reembolsaron automáticamente ${item.price} ZCoins a tu bolsillo.`,
         embeds: []
       });
       return;
@@ -178,11 +149,4 @@ async function execute(interaction, { licenseApi } = {}) {
   }
 }
 
-module.exports = {
-  data,
-  execute,
-  selectPrize,
-  purchaseProtector,
-  purchaseMysteryBox,
-  refundMysteryBox
-};
+module.exports = { data, execute, chargeItem, refundItem };

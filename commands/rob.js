@@ -1,0 +1,152 @@
+const crypto = require('node:crypto');
+const { EmbedBuilder, MessageFlags, SlashCommandBuilder } = require('discord.js');
+const { db, queries } = require('../database/db');
+
+const ROB_COOLDOWN_MS = 2 * 60 * 60 * 1000;
+const MINIMUM_POCKET = 100;
+const FAILURE_FINE_BPS = 1_500;
+
+const data = new SlashCommandBuilder()
+  .setName('rob')
+  .setDescription('Intenta robar ZCoins del bolsillo de otro usuario')
+  .setDMPermission(false)
+  .addUserOption((option) =>
+    option
+      .setName('usuario')
+      .setDescription('Usuario al que intentarás robar')
+      .setRequired(true)
+  );
+
+const getCooldownQuery = db.prepare(`
+  SELECT last_rob_at FROM rob_cooldowns WHERE userId = ?
+`);
+const setCooldownQuery = db.prepare(`
+  INSERT INTO rob_cooldowns (userId, last_rob_at)
+  VALUES (?, ?)
+  ON CONFLICT(userId) DO UPDATE SET last_rob_at = excluded.last_rob_at
+`);
+
+function robError(code, message, extra = {}) {
+  const error = new Error(message);
+  error.code = code;
+  Object.assign(error, extra);
+  return error;
+}
+
+const robTransaction = db.transaction((robberId, victimId, nowIso, successRoll, stealBps) => {
+  if (robberId === victimId) throw robError('SELF_ROB', 'No puedes robarte a ti mismo.');
+  queries.createUser.run(robberId);
+  queries.createUser.run(victimId);
+
+  const nowMs = new Date(nowIso).getTime();
+  const cooldown = getCooldownQuery.get(robberId);
+  const lastRobMs = cooldown ? new Date(cooldown.last_rob_at).getTime() : null;
+  if (Number.isFinite(lastRobMs) && nowMs - lastRobMs < ROB_COOLDOWN_MS) {
+    throw robError('COOLDOWN', 'Todavía estás en cooldown.', {
+      retryAt: new Date(lastRobMs + ROB_COOLDOWN_MS).toISOString()
+    });
+  }
+
+  const robber = queries.getUser.get(robberId);
+  const victim = queries.getUser.get(victimId);
+  if (robber.zcoins < MINIMUM_POCKET) {
+    throw robError('ROBBER_TOO_POOR', 'Necesitas al menos 100 ZCoins en el bolsillo.');
+  }
+  if (victim.zcoins < MINIMUM_POCKET) {
+    throw robError('VICTIM_TOO_POOR', 'La víctima necesita al menos 100 ZCoins en el bolsillo.');
+  }
+
+  setCooldownQuery.run(robberId, nowIso);
+  const success = successRoll < 4_000;
+  if (success) {
+    const amount = Math.max(1, Math.floor((victim.zcoins * stealBps) / 10_000));
+    queries.addCoins.run(-amount, victimId);
+    queries.addCoins.run(amount, robberId);
+    queries.registerCoinLog.run(robberId, amount, `Robo exitoso a ${victimId}`);
+    queries.registerCoinLog.run(victimId, -amount, `Víctima de robo por ${robberId}`);
+    return {
+      success: true,
+      amount,
+      percentage: stealBps / 100,
+      robber: queries.getUser.get(robberId),
+      victim: queries.getUser.get(victimId),
+      nextAttemptAt: new Date(nowMs + ROB_COOLDOWN_MS).toISOString()
+    };
+  }
+
+  const fine = Math.max(1, Math.floor((robber.zcoins * FAILURE_FINE_BPS) / 10_000));
+  queries.addCoins.run(-fine, robberId);
+  queries.addCoins.run(fine, victimId);
+  queries.registerCoinLog.run(robberId, -fine, `Multa por robo fallido contra ${victimId}`);
+  queries.registerCoinLog.run(victimId, fine, `Compensación por intento de robo de ${robberId}`);
+  return {
+    success: false,
+    amount: fine,
+    percentage: FAILURE_FINE_BPS / 100,
+    robber: queries.getUser.get(robberId),
+    victim: queries.getUser.get(victimId),
+    nextAttemptAt: new Date(nowMs + ROB_COOLDOWN_MS).toISOString()
+  };
+});
+
+function attemptRob(robberId, victimId, options = {}) {
+  const now = options.now ? new Date(options.now) : new Date();
+  if (!Number.isFinite(now.getTime())) throw new TypeError('Fecha inválida.');
+  const successRoll = options.successRoll ?? crypto.randomInt(10_000);
+  const stealBps = options.stealBps ?? crypto.randomInt(2_000, 5_001);
+  if (!Number.isInteger(successRoll) || successRoll < 0 || successRoll >= 10_000) {
+    throw new RangeError('successRoll debe estar entre 0 y 9999.');
+  }
+  if (!Number.isInteger(stealBps) || stealBps < 2_000 || stealBps > 5_000) {
+    throw new RangeError('stealBps debe estar entre 2000 y 5000.');
+  }
+  return robTransaction(
+    String(robberId),
+    String(victimId),
+    now.toISOString(),
+    successRoll,
+    stealBps
+  );
+}
+
+async function execute(interaction) {
+  const victim = interaction.options.getUser('usuario', true);
+  if (victim.bot) {
+    await interaction.reply({ content: 'No puedes robarle a un bot.', flags: MessageFlags.Ephemeral });
+    return;
+  }
+
+  try {
+    const result = attemptRob(interaction.user.id, victim.id);
+    const nextTimestamp = Math.floor(new Date(result.nextAttemptAt).getTime() / 1000);
+    const embed = new EmbedBuilder()
+      .setColor(result.success ? 0x22c55e : 0xef4444)
+      .setTitle(result.success ? '💰 ¡Robo exitoso!' : '🚨 ¡Te atraparon!')
+      .setDescription(
+        result.success
+          ? `${interaction.user} robó 🪙 **${result.amount.toLocaleString('es-ES')} ZCoins** (${result.percentage}%) del bolsillo de ${victim}.`
+          : `${interaction.user} pagó una multa de 🪙 **${result.amount.toLocaleString('es-ES')} ZCoins** (${result.percentage}%) directamente a ${victim}.`
+      )
+      .addFields(
+        { name: 'Bolsillo del ladrón', value: `🪙 ${result.robber.zcoins.toLocaleString('es-ES')}`, inline: true },
+        { name: 'Próximo intento', value: `<t:${nextTimestamp}:R>`, inline: true }
+      )
+      .setTimestamp();
+    await interaction.reply({ embeds: [embed] });
+  } catch (error) {
+    const messages = {
+      SELF_ROB: 'No puedes robarte a ti mismo.',
+      ROBBER_TOO_POOR: 'Necesitas al menos 100 ZCoins en el bolsillo para arriesgarte.',
+      VICTIM_TOO_POOR: 'Ese usuario necesita al menos 100 ZCoins en el bolsillo para poder ser robado.'
+    };
+    if (error.code === 'COOLDOWN') {
+      const timestamp = Math.floor(new Date(error.retryAt).getTime() / 1000);
+      await interaction.reply({ content: `Podrás volver a robar <t:${timestamp}:R>.`, flags: MessageFlags.Ephemeral });
+      return;
+    }
+    if (!messages[error.code]) throw error;
+    await interaction.reply({ content: messages[error.code], flags: MessageFlags.Ephemeral });
+  }
+}
+
+module.exports = { data, execute, attemptRob, ROB_COOLDOWN_MS, MINIMUM_POCKET };
