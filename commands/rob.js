@@ -1,8 +1,10 @@
 const crypto = require('node:crypto');
 const { EmbedBuilder, MessageFlags, SlashCommandBuilder } = require('discord.js');
 const { db, queries } = require('../database/db');
+const { setCooldown, getCooldown } = require('../utils/cooldownManager');
 
 const ROB_COOLDOWN_MS = 2 * 60 * 60 * 1000;
+const ROB_COOLDOWN_SECONDS = ROB_COOLDOWN_MS / 1000;
 const MINIMUM_POCKET = 100;
 const FAILURE_FINE_BPS = 1_500;
 
@@ -17,15 +19,6 @@ const data = new SlashCommandBuilder()
       .setRequired(true)
   );
 
-const getCooldownQuery = db.prepare(`
-  SELECT last_rob_at FROM rob_cooldowns WHERE userId = ?
-`);
-const setCooldownQuery = db.prepare(`
-  INSERT INTO rob_cooldowns (userId, last_rob_at)
-  VALUES (?, ?)
-  ON CONFLICT(userId) DO UPDATE SET last_rob_at = excluded.last_rob_at
-`);
-
 function robError(code, message, extra = {}) {
   const error = new Error(message);
   error.code = code;
@@ -39,11 +32,10 @@ const robTransaction = db.transaction((robberId, victimId, nowIso, successRoll, 
   queries.createUser.run(victimId);
 
   const nowMs = new Date(nowIso).getTime();
-  const cooldown = getCooldownQuery.get(robberId);
-  const lastRobMs = cooldown ? new Date(cooldown.last_rob_at).getTime() : null;
-  if (Number.isFinite(lastRobMs) && nowMs - lastRobMs < ROB_COOLDOWN_MS) {
+  const remainingMs = getCooldown(robberId, 'rob', nowMs);
+  if (remainingMs !== null) {
     throw robError('COOLDOWN', 'Todavía estás en cooldown.', {
-      retryAt: new Date(lastRobMs + ROB_COOLDOWN_MS).toISOString()
+      retryAt: new Date(nowMs + remainingMs).toISOString()
     });
   }
 
@@ -56,7 +48,7 @@ const robTransaction = db.transaction((robberId, victimId, nowIso, successRoll, 
     throw robError('VICTIM_TOO_POOR', 'La víctima necesita al menos 100 ZCoins en el bolsillo.');
   }
 
-  setCooldownQuery.run(robberId, nowIso);
+  setCooldown(robberId, 'rob', ROB_COOLDOWN_SECONDS, nowMs);
   const success = successRoll < 4_000;
   if (success) {
     const amount = Math.max(1, Math.floor((victim.zcoins * stealBps) / 10_000));

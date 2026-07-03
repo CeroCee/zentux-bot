@@ -1,5 +1,6 @@
 const { EmbedBuilder, MessageFlags, SlashCommandBuilder } = require('discord.js');
 const { db, queries, addXp } = require('../database/db');
+const { setCooldown, getCooldown } = require('../utils/cooldownManager');
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const STREAK_BREAK_MS = 48 * 60 * 60 * 1000;
@@ -25,7 +26,17 @@ const claimDailyTransaction = db.transaction((userId, nowIso) => {
     : null;
   const elapsedMs = Number.isFinite(lastClaimMs) ? nowMs - lastClaimMs : null;
 
+  const centralizedRemaining = getCooldown(userId, 'daily', nowMs);
+  if (centralizedRemaining !== null) {
+    return {
+      claimed: false,
+      nextClaimAt: new Date(nowMs + centralizedRemaining).toISOString(),
+      user
+    };
+  }
+
   if (elapsedMs !== null && elapsedMs < DAY_MS) {
+    setCooldown(userId, 'daily', (DAY_MS - elapsedMs) / 1000, nowMs);
     return {
       claimed: false,
       nextClaimAt: new Date(lastClaimMs + DAY_MS).toISOString(),
@@ -57,6 +68,7 @@ const claimDailyTransaction = db.transaction((userId, nowIso) => {
   updateDailyQuery.run(reward, streak, nowIso, protector, userId);
   queries.registerCoinLog.run(userId, reward, `Recompensa diaria: dia ${rewardDay}`);
   const xpResult = addXp(userId, DAILY_XP, 'Recompensa diaria');
+  setCooldown(userId, 'daily', DAY_MS / 1000, nowMs);
 
   return {
     claimed: true,

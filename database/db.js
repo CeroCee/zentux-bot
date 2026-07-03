@@ -61,11 +61,6 @@ db.exec(`
     timestamp DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
 
-  CREATE TABLE IF NOT EXISTS rob_cooldowns (
-    userId TEXT PRIMARY KEY,
-    last_rob_at TEXT NOT NULL
-  );
-
   CREATE INDEX IF NOT EXISTS idx_quests_user_date
   ON quests (userId, date);
 

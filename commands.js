@@ -7,6 +7,8 @@ const economyCommandModules = [
   require('./commands/bank'),
   require('./commands/rob'),
   require('./commands/leaderboard'),
+  require('./commands/admin-money'),
+  require('./commands/admin-cooldown'),
   require('./commands/shop'),
   require('./commands/redeem')
 ];
