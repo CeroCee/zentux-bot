@@ -1,5 +1,11 @@
 const { ChannelType, PermissionFlagsBits, SlashCommandBuilder } = require('discord.js');
 
+const economyCommandModules = [
+  require('./commands/coins'),
+  require('./commands/daily'),
+  require('./commands/transfer')
+];
+
 const commands = [
   new SlashCommandBuilder()
     .setName('canjear')
@@ -162,7 +168,8 @@ const commands = [
         .setMinValue(1)
         .setMaxValue(25)
         .setRequired(true)
-    )
+    ),
+  ...economyCommandModules.map((command) => command.data)
 ];
 
-module.exports = { commands };
+module.exports = { commands, economyCommandModules };

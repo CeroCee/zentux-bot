@@ -16,6 +16,7 @@ const {
 } = require('discord.js');
 const config = require('./config.json');
 const database = require('./database/db');
+const { economyCommandModules } = require('./commands');
 const { createLicenseApi, LicenseApiError } = require('./license-api');
 
 const requiredEnvironment = [
@@ -96,6 +97,9 @@ function loadEvents(discordClient) {
 }
 
 loadEvents(client);
+const economyCommands = new Map(
+  economyCommandModules.map((command) => [command.data.name, command])
+);
 const redeemAttempts = new Map();
 let roleSyncRunning = false;
 let purchaseSyncRunning = false;
@@ -943,6 +947,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return await handleDeleteButton(interaction);
     }
     if (interaction.isChatInputCommand()) {
+      const economyCommand = economyCommands.get(interaction.commandName);
+      if (economyCommand) return await economyCommand.execute(interaction);
       if (interaction.commandName === 'canjear') return await handleRedeem(interaction);
       if (interaction.commandName === 'info') return await handleInfo(interaction);
       if (interaction.commandName === 'compra') return await handlePurchase(interaction);
