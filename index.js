@@ -600,10 +600,9 @@ async function handleGenerate(interaction) {
   }
 
   await interaction.deferReply({ flags: EPHEMERAL });
-  const subcommand = interaction.options.getSubcommand(true);
   const member = await interaction.guild.members.fetch(interaction.user.id);
 
-  if (subcommand === 'giveaway') {
+  if (interaction.commandName === 'generar-giveaway') {
     if (!member.permissions.has(PermissionFlagsBits.Administrator)) {
       return interaction.editReply({ content: 'Solo los administradores pueden generar keys de giveaway.' });
     }
@@ -906,6 +905,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       if (interaction.commandName === 'liberar-admin') return await handleReleaseCommand(interaction);
       if (interaction.commandName === 'liberar-access') return await handleReleaseCommand(interaction);
       if (interaction.commandName === 'generar') return await handleGenerate(interaction);
+      if (interaction.commandName === 'generar-giveaway') return await handleGenerate(interaction);
       if (interaction.commandName === 'logs') return await handleLogs(interaction);
       if (interaction.commandName === 'borrar') return await handleDeleteCommand(interaction);
     }
