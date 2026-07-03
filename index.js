@@ -1,5 +1,7 @@
 require('dotenv').config();
 const crypto = require('node:crypto');
+const fs = require('node:fs');
+const path = require('node:path');
 const {
   ActionRowBuilder,
   ButtonBuilder,
@@ -11,22 +13,24 @@ const {
   MessageFlags,
   PermissionFlagsBits
 } = require('discord.js');
+const config = require('./config.json');
+const database = require('./database/db');
 const { createLicenseApi, LicenseApiError } = require('./license-api');
 
 const requiredEnvironment = [
-  'DISCORD_TOKEN',
   'GUILD_ID',
   'BUYER_ROLE_ID',
   'LICENSE_API_URL',
   'DISCORD_LICENSE_SECRET'
 ];
 const missingEnvironment = requiredEnvironment.filter((name) => !process.env[name]);
+const TOKEN = process.env.DISCORD_TOKEN || config.token;
+if (!TOKEN) missingEnvironment.unshift('DISCORD_TOKEN o config.token');
 if (missingEnvironment.length > 0) {
   console.error(`Faltan variables de entorno: ${missingEnvironment.join(', ')}`);
   process.exit(1);
 }
 
-const TOKEN = process.env.DISCORD_TOKEN;
 const GUILD_ID = process.env.GUILD_ID;
 const BUYER_ROLE_ID = process.env.BUYER_ROLE_ID;
 const CONTENT_CREATOR_ROLE_ID = process.env.CONTENT_CREATOR_ROLE_ID || '1392619993153142834';
@@ -49,7 +53,40 @@ const licenseApi = createLicenseApi({
   secret: process.env.DISCORD_LICENSE_SECRET
 });
 
-const client = new Client({ intents: [GatewayIntentBits.Guilds] });
+const client = new Client({
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildVoiceStates
+  ]
+});
+
+function loadEvents(discordClient) {
+  const eventsDirectory = path.join(__dirname, 'events');
+  if (!fs.existsSync(eventsDirectory)) return;
+
+  const eventFiles = fs.readdirSync(eventsDirectory)
+    .filter((fileName) => fileName.endsWith('.js'))
+    .sort();
+
+  for (const fileName of eventFiles) {
+    const event = require(path.join(eventsDirectory, fileName));
+    if (typeof event.register === 'function') {
+      event.register(discordClient);
+      console.log(`Evento cargado: ${event.name || fileName}`);
+      continue;
+    }
+
+    if (!event.name || typeof event.execute !== 'function') {
+      throw new TypeError(`El evento ${fileName} no exporta register() ni name/execute.`);
+    }
+
+    const listener = (...args) => event.execute(...args, discordClient);
+    discordClient[event.once ? 'once' : 'on'](event.name, listener);
+    console.log(`Evento cargado: ${event.name}`);
+  }
+}
+
+loadEvents(client);
 const redeemAttempts = new Map();
 let roleSyncRunning = false;
 let purchaseSyncRunning = false;
@@ -927,5 +964,15 @@ client.on(Events.InteractionCreate, async (interaction) => {
 process.on('unhandledRejection', (error) => {
   console.error('Unhandled rejection:', error);
 });
+
+function shutdown(signal) {
+  console.log(`${signal} recibido. Cerrando Zentux de forma segura...`);
+  database.closeDatabase();
+  client.destroy();
+  process.exit(0);
+}
+
+process.once('SIGINT', () => shutdown('SIGINT'));
+process.once('SIGTERM', () => shutdown('SIGTERM'));
 
 client.login(TOKEN);

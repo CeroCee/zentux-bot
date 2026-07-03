@@ -7,7 +7,7 @@
     "start": "node index.js",
     "deploy-commands": "node deploy-commands.js",
     "update-profile": "node update-profile.js",
-    "check": "node --check index.js && node --check deploy-commands.js && node --check license-api.js && node --check commands.js && node --check update-profile.js && node --check database/db.js"
+    "check": "node --check index.js && node --check deploy-commands.js && node --check license-api.js && node --check commands.js && node --check update-profile.js && node --check database/db.js && node --check events/voiceGrind.js"
   },
   "keywords": [],
   "author": "",
