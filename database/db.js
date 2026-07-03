@@ -22,6 +22,9 @@ db.exec(`
     bank INTEGER NOT NULL DEFAULT 0,
     level INTEGER NOT NULL DEFAULT 1,
     xp INTEGER NOT NULL DEFAULT 0,
+    total_vc_minutes INTEGER NOT NULL DEFAULT 0,
+    total_reactions INTEGER NOT NULL DEFAULT 0,
+    total_invites INTEGER NOT NULL DEFAULT 0,
     streak_days INTEGER NOT NULL DEFAULT 0,
     last_daily_claim TEXT,
     streak_protector INTEGER NOT NULL DEFAULT 0
@@ -79,9 +82,19 @@ db.exec(`
   ON xp_logs (userId);
 `);
 
-const userColumns = db.pragma('table_info(users)');
-if (!userColumns.some((column) => column.name === 'bank')) {
-  db.exec('ALTER TABLE users ADD COLUMN bank INTEGER NOT NULL DEFAULT 0;');
+const requiredUserColumns = {
+  bank: 'INTEGER NOT NULL DEFAULT 0',
+  total_vc_minutes: 'INTEGER NOT NULL DEFAULT 0',
+  total_reactions: 'INTEGER NOT NULL DEFAULT 0',
+  total_invites: 'INTEGER NOT NULL DEFAULT 0'
+};
+const existingUserColumns = new Set(
+  db.pragma('table_info(users)').map((column) => column.name)
+);
+for (const [columnName, definition] of Object.entries(requiredUserColumns)) {
+  if (!existingUserColumns.has(columnName)) {
+    db.exec(`ALTER TABLE users ADD COLUMN ${columnName} ${definition};`);
+  }
 }
 
 const queries = {
@@ -113,6 +126,46 @@ const queries = {
     UPDATE users
     SET bank = bank - ?, zcoins = zcoins + ?
     WHERE userId = ? AND bank >= ?
+  `),
+
+  incrementVoiceMinutes: db.prepare(`
+    UPDATE users SET total_vc_minutes = total_vc_minutes + ? WHERE userId = ?
+  `),
+
+  incrementReactions: db.prepare(`
+    UPDATE users SET total_reactions = total_reactions + ? WHERE userId = ?
+  `),
+
+  incrementInvites: db.prepare(`
+    UPDATE users SET total_invites = total_invites + ? WHERE userId = ?
+  `),
+
+  topWealth: db.prepare(`
+    SELECT userId, zcoins, bank, (zcoins + bank) AS score
+    FROM users
+    ORDER BY score DESC, userId ASC
+    LIMIT ?
+  `),
+
+  topVoice: db.prepare(`
+    SELECT userId, total_vc_minutes AS score
+    FROM users
+    ORDER BY score DESC, userId ASC
+    LIMIT ?
+  `),
+
+  topReactions: db.prepare(`
+    SELECT userId, total_reactions AS score
+    FROM users
+    ORDER BY score DESC, userId ASC
+    LIMIT ?
+  `),
+
+  topInvites: db.prepare(`
+    SELECT userId, total_invites AS score
+    FROM users
+    ORDER BY score DESC, userId ASC
+    LIMIT ?
   `),
 
   updateXp: db.prepare(`
@@ -271,6 +324,84 @@ function withdrawCoins(userId, amount) {
   return withdrawCoinsTransaction(userId, amount);
 }
 
+function incrementStatistic(userId, amount, query) {
+  const normalizedUserId = validateUserId(userId);
+  const normalizedAmount = validateAmount(amount);
+  if (normalizedAmount <= 0) throw new TypeError('El incremento debe ser mayor que cero.');
+  queries.createUser.run(normalizedUserId);
+  query.run(normalizedAmount, normalizedUserId);
+  return queries.getUser.get(normalizedUserId);
+}
+
+function incrementVoiceMinutes(userId, minutes = 10) {
+  return incrementStatistic(userId, minutes, queries.incrementVoiceMinutes);
+}
+
+function incrementReactions(userId, amount = 1) {
+  return incrementStatistic(userId, amount, queries.incrementReactions);
+}
+
+function incrementInvites(userId, amount = 1) {
+  return incrementStatistic(userId, amount, queries.incrementInvites);
+}
+
+const leaderboardQueries = {
+  wealth: queries.topWealth,
+  voice: queries.topVoice,
+  reactions: queries.topReactions,
+  invites: queries.topInvites
+};
+
+const leaderboardExpressions = {
+  wealth: '(zcoins + bank)',
+  voice: 'total_vc_minutes',
+  reactions: 'total_reactions',
+  invites: 'total_invites'
+};
+
+const leaderboardPositionQueries = Object.fromEntries(
+  Object.entries(leaderboardExpressions).map(([category, expression]) => [
+    category,
+    db.prepare(`
+      SELECT position, score
+      FROM (
+        SELECT
+          userId,
+          ${expression} AS score,
+          ROW_NUMBER() OVER (ORDER BY ${expression} DESC, userId ASC) AS position
+        FROM users
+      )
+      WHERE userId = ?
+    `)
+  ])
+);
+
+function normalizeLeaderboardCategory(category) {
+  const value = String(category || '').trim().toLowerCase();
+  if (!leaderboardQueries[value]) {
+    throw new TypeError(`Categoría de leaderboard no válida: ${category}`);
+  }
+  return value;
+}
+
+function getLeaderboard(category, limit = 10) {
+  const normalizedCategory = normalizeLeaderboardCategory(category);
+  const normalizedLimit = Math.min(Math.max(Number.parseInt(limit, 10) || 10, 1), 100);
+  return leaderboardQueries[normalizedCategory].all(normalizedLimit);
+}
+
+function getLeaderboardPosition(category, userId) {
+  const normalizedCategory = normalizeLeaderboardCategory(category);
+  const normalizedUserId = validateUserId(userId);
+  queries.createUser.run(normalizedUserId);
+  return leaderboardPositionQueries[normalizedCategory].get(normalizedUserId);
+}
+
+function getTopWealth(limit = 10) { return getLeaderboard('wealth', limit); }
+function getTopVoice(limit = 10) { return getLeaderboard('voice', limit); }
+function getTopReactions(limit = 10) { return getLeaderboard('reactions', limit); }
+function getTopInvites(limit = 10) { return getLeaderboard('invites', limit); }
+
 function xpForNextLevel(level) {
   const normalizedLevel = Math.max(1, Number.parseInt(level, 10) || 1);
   return normalizedLevel * 100;
@@ -337,6 +468,15 @@ module.exports = {
   addCoins,
   depositCoins,
   withdrawCoins,
+  incrementVoiceMinutes,
+  incrementReactions,
+  incrementInvites,
+  getLeaderboard,
+  getLeaderboardPosition,
+  getTopWealth,
+  getTopVoice,
+  getTopReactions,
+  getTopInvites,
   addXp,
   xpForNextLevel,
   registerCoinLog,

@@ -1,5 +1,5 @@
 const { Events, PermissionFlagsBits } = require('discord.js');
-const { db, addXp } = require('../database/db');
+const { db, addXp, incrementInvites } = require('../database/db');
 const { checkQuests } = require('./reactionsAndQuests');
 
 const INVITE_XP = 25;
@@ -47,7 +47,8 @@ async function fetchInviteSnapshot(guild) {
 const rewardInviteTransaction = db.transaction((inviterId) => {
   const quest = checkQuests(inviterId, 'invite');
   const xp = addXp(inviterId, INVITE_XP, 'Invitación verificada');
-  return { quest, xp };
+  const user = incrementInvites(inviterId, 1);
+  return { quest, xp, user };
 });
 
 async function handleMemberJoin(member) {

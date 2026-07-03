@@ -1,6 +1,12 @@
 const { Events } = require('discord.js');
 const config = require('../config.json');
-const { db, addCoins, addXp, getOrCreateUser } = require('../database/db');
+const {
+  db,
+  addCoins,
+  addXp,
+  getOrCreateUser,
+  incrementReactions
+} = require('../database/db');
 
 const REACTION_REWARD = 10;
 const MAX_DAILY_REACTION_REWARD = 100;
@@ -167,6 +173,8 @@ const rewardReactionTransaction = db.transaction((userId, messageId) => {
   if (claim.changes !== 1) {
     return { rewarded: false, duplicate: true, earned: null, quest: null };
   }
+
+  incrementReactions(normalizedUserId, 1);
 
   const date = currentDate();
   const earned = Number(

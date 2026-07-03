@@ -1,6 +1,6 @@
 const { Events } = require('discord.js');
 const config = require('../config.json');
-const { db, addCoins, addXp } = require('../database/db');
+const { db, addCoins, addXp, incrementVoiceMinutes } = require('../database/db');
 const { checkQuests } = require('./reactionsAndQuests');
 
 const CHECK_INTERVAL_MS = 10 * 60 * 1000;
@@ -14,6 +14,7 @@ const registeredClients = new WeakSet();
 const rewardVoiceTransaction = db.transaction((userId) => {
   addCoins(userId, VOICE_REWARD, VOICE_REWARD_REASON);
   addXp(userId, VOICE_XP, VOICE_REWARD_REASON);
+  incrementVoiceMinutes(userId, 10);
   checkQuests(userId, 'voice');
 });
 
@@ -150,5 +151,6 @@ module.exports = {
   name: Events.VoiceStateUpdate,
   register,
   checkVoiceRewards,
-  isEligible
+  isEligible,
+  rewardVoiceTransaction
 };
