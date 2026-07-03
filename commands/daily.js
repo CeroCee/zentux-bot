@@ -1,13 +1,10 @@
-const {
-  EmbedBuilder,
-  MessageFlags,
-  SlashCommandBuilder
-} = require('discord.js');
-const { db, queries } = require('../database/db');
+const { EmbedBuilder, MessageFlags, SlashCommandBuilder } = require('discord.js');
+const { db, queries, addXp } = require('../database/db');
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const STREAK_BREAK_MS = 48 * 60 * 60 * 1000;
 const DAILY_REWARDS = Object.freeze([25, 35, 45, 55, 65, 80, 100]);
+const DAILY_XP = 15;
 
 const data = new SlashCommandBuilder()
   .setName('daily')
@@ -15,11 +12,7 @@ const data = new SlashCommandBuilder()
 
 const updateDailyQuery = db.prepare(`
   UPDATE users
-  SET
-    zcoins = zcoins + ?,
-    streak_days = ?,
-    last_daily_claim = ?,
-    streak_protector = ?
+  SET zcoins = zcoins + ?, streak_days = ?, last_daily_claim = ?, streak_protector = ?
   WHERE userId = ?
 `);
 
@@ -59,23 +52,21 @@ const claimDailyTransaction = db.transaction((userId, nowIso) => {
   }
 
   if (streak < 1) streak = 1;
-
   const rewardDay = Math.min(streak, DAILY_REWARDS.length);
   const reward = DAILY_REWARDS[rewardDay - 1];
   updateDailyQuery.run(reward, streak, nowIso, protector, userId);
-  queries.registerCoinLog.run(
-    userId,
-    reward,
-    `Recompensa diaria: dia ${rewardDay}`
-  );
+  queries.registerCoinLog.run(userId, reward, `Recompensa diaria: dia ${rewardDay}`);
+  const xpResult = addXp(userId, DAILY_XP, 'Recompensa diaria');
 
   return {
     claimed: true,
     reward,
     rewardDay,
+    xpEarned: DAILY_XP,
+    levelsGained: xpResult.levelsGained,
     protectorUsed,
     nextClaimAt: new Date(nowMs + DAY_MS).toISOString(),
-    user: queries.getUser.get(userId)
+    user: xpResult.user
   };
 });
 
@@ -87,7 +78,6 @@ function claimDaily(userId, now = new Date()) {
 
 async function execute(interaction) {
   const result = claimDaily(interaction.user.id);
-
   if (!result.claimed) {
     const timestamp = Math.floor(new Date(result.nextClaimAt).getTime() / 1000);
     await interaction.reply({
@@ -99,41 +89,28 @@ async function execute(interaction) {
 
   const nextTimestamp = Math.floor(new Date(result.nextClaimAt).getTime() / 1000);
   const protectionText = result.protectorUsed
-    ? '\n🛡️ Se consumio un protector para conservar tu racha.'
+    ? '\n🛡️ Se consumió un protector para conservar tu racha.'
     : '';
-
   const embed = new EmbedBuilder()
     .setColor(0x22c55e)
     .setTitle('Recompensa diaria reclamada')
     .setDescription(
-      `Recibiste 🪙 **${result.reward} ZCoins**.${protectionText}`
+      `Recibiste 🪙 **${result.reward} ZCoins** y ✨ **${result.xpEarned} XP**.${protectionText}`
     )
     .addFields(
+      { name: 'Racha actual', value: `🔥 ${result.user.streak_days} día(s)`, inline: true },
+      { name: 'Balance', value: `🪙 ${result.user.zcoins.toLocaleString('es-ES')}`, inline: true },
       {
-        name: 'Racha actual',
-        value: `🔥 ${result.user.streak_days} dia(s)`,
+        name: 'Nivel',
+        value: `⭐ ${result.user.level}${result.levelsGained ? ' — ¡Subiste de nivel!' : ''}`,
         inline: true
       },
-      {
-        name: 'Balance',
-        value: `🪙 ${result.user.zcoins.toLocaleString('es-ES')}`,
-        inline: true
-      },
-      {
-        name: 'Proximo daily',
-        value: `<t:${nextTimestamp}:R>`,
-        inline: false
-      }
+      { name: 'Próximo daily', value: `<t:${nextTimestamp}:R>`, inline: false }
     )
-    .setFooter({ text: `Recompensa de la escala: dia ${result.rewardDay}` })
+    .setFooter({ text: `Recompensa de la escala: día ${result.rewardDay}` })
     .setTimestamp();
 
   await interaction.reply({ embeds: [embed] });
 }
 
-module.exports = {
-  data,
-  execute,
-  claimDaily,
-  DAILY_REWARDS
-};
+module.exports = { data, execute, claimDaily, DAILY_REWARDS, DAILY_XP };

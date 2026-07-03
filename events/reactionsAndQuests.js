@@ -1,13 +1,15 @@
 const { Events } = require('discord.js');
 const config = require('../config.json');
-const { db, addCoins, getOrCreateUser } = require('../database/db');
+const { db, addCoins, addXp, getOrCreateUser } = require('../database/db');
 
 const REACTION_REWARD = 10;
 const MAX_DAILY_REACTION_REWARD = 100;
 const REACTION_REASON = 'Reaccion en anuncios';
+const REACTION_XP = 5;
 const COMBO_REWARD = 100;
 const COMBO_REASON = 'Combo diario: 3 misiones completadas';
 const COMBO_QUEST_ID = 'daily_combo_bonus';
+const COMBO_XP = 50;
 
 const DAILY_QUESTS = Object.freeze({
   reaction: {
@@ -141,6 +143,7 @@ const checkQuestsTransaction = db.transaction((userId, type) => {
   ) {
     createComboMarkerQuery.run(normalizedUserId, COMBO_QUEST_ID, date);
     addCoins(normalizedUserId, COMBO_REWARD, COMBO_REASON);
+    addXp(normalizedUserId, COMBO_XP, 'Combo diario completado');
     comboAwarded = true;
   }
 
@@ -175,12 +178,14 @@ const rewardReactionTransaction = db.transaction((userId, messageId) => {
   }
 
   addCoins(normalizedUserId, REACTION_REWARD, REACTION_REASON);
+  const xp = addXp(normalizedUserId, REACTION_XP, REACTION_REASON);
   const quest = checkQuests(normalizedUserId, 'reaction');
 
   return {
     rewarded: true,
     duplicate: false,
     earned: earned + REACTION_REWARD,
+    xp,
     quest
   };
 });

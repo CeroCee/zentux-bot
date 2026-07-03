@@ -49,6 +49,14 @@ db.exec(`
     PRIMARY KEY (userId, messageId)
   );
 
+  CREATE TABLE IF NOT EXISTS xp_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    userId TEXT NOT NULL,
+    amount INTEGER NOT NULL,
+    reason TEXT NOT NULL,
+    timestamp DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+
   CREATE INDEX IF NOT EXISTS idx_quests_user_date
   ON quests (userId, date);
 
@@ -60,6 +68,9 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_reaction_claims_message
   ON reaction_claims (messageId);
+
+  CREATE INDEX IF NOT EXISTS idx_xp_logs_user
+  ON xp_logs (userId);
 `);
 
 const queries = {
@@ -79,6 +90,17 @@ const queries = {
     UPDATE users
     SET zcoins = zcoins + ?
     WHERE userId = ?
+  `),
+
+  updateXp: db.prepare(`
+    UPDATE users
+    SET xp = ?, level = ?
+    WHERE userId = ?
+  `),
+
+  registerXpLog: db.prepare(`
+    INSERT INTO xp_logs (userId, amount, reason)
+    VALUES (?, ?, ?)
   `),
 
   registerCoinLog: db.prepare(`
@@ -169,6 +191,49 @@ function addCoins(userId, amount, reason = 'Sin especificar') {
   return addCoinsTransaction(userId, amount, reason);
 }
 
+function xpForNextLevel(level) {
+  const normalizedLevel = Math.max(1, Number.parseInt(level, 10) || 1);
+  return normalizedLevel * 100;
+}
+
+const addXpTransaction = db.transaction((userId, amount, reason) => {
+  const normalizedUserId = validateUserId(userId);
+  const normalizedAmount = validateAmount(amount);
+  const normalizedReason = String(reason || '').trim();
+  if (normalizedAmount <= 0) throw new TypeError('La XP debe ser mayor que cero.');
+  if (!normalizedReason) throw new TypeError('reason es obligatorio.');
+
+  queries.createUser.run(normalizedUserId);
+  const before = queries.getUser.get(normalizedUserId);
+  let level = Math.max(1, before.level);
+  let xp = Math.max(0, before.xp) + normalizedAmount;
+  let levelsGained = 0;
+
+  while (xp >= xpForNextLevel(level)) {
+    xp -= xpForNextLevel(level);
+    level += 1;
+    levelsGained += 1;
+  }
+
+  queries.updateXp.run(xp, level, normalizedUserId);
+  const logResult = queries.registerXpLog.run(
+    normalizedUserId,
+    normalizedAmount,
+    normalizedReason
+  );
+
+  return {
+    user: queries.getUser.get(normalizedUserId),
+    levelsGained,
+    previousLevel: before.level,
+    logId: Number(logResult.lastInsertRowid)
+  };
+});
+
+function addXp(userId, amount, reason = 'Actividad') {
+  return addXpTransaction(userId, amount, reason);
+}
+
 function getCoinLogs(userId, limit = 25) {
   const normalizedUserId = validateUserId(userId);
   const normalizedLimit = Math.min(
@@ -190,6 +255,8 @@ module.exports = {
   getUser,
   getOrCreateUser,
   addCoins,
+  addXp,
+  xpForNextLevel,
   registerCoinLog,
   getCoinLogs,
   closeDatabase

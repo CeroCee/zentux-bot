@@ -1,17 +1,19 @@
 const { Events } = require('discord.js');
 const config = require('../config.json');
-const { db, addCoins } = require('../database/db');
+const { db, addCoins, addXp } = require('../database/db');
 const { checkQuests } = require('./reactionsAndQuests');
 
 const CHECK_INTERVAL_MS = 10 * 60 * 1000;
 const VOICE_REWARD = 20;
 const VOICE_REWARD_REASON = 'Voice Grind: 10 minutos activos';
+const VOICE_XP = 10;
 
 const eligibleSince = new Map();
 const registeredClients = new WeakSet();
 
 const rewardVoiceTransaction = db.transaction((userId) => {
   addCoins(userId, VOICE_REWARD, VOICE_REWARD_REASON);
+  addXp(userId, VOICE_XP, VOICE_REWARD_REASON);
   checkQuests(userId, 'voice');
 });
 
