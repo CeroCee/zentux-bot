@@ -3,9 +3,11 @@ const path = require('node:path');
 const Database = require('better-sqlite3');
 
 const databaseDirectory = __dirname;
-const databasePath = path.join(databaseDirectory, 'zentux.db');
+const databasePath = path.resolve(
+  process.env.ZENTUX_DB_PATH || path.join(databaseDirectory, 'zentux.db')
+);
 
-fs.mkdirSync(databaseDirectory, { recursive: true });
+fs.mkdirSync(path.dirname(databasePath), { recursive: true });
 
 const db = new Database(databasePath);
 
