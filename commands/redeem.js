@@ -2,6 +2,8 @@ const { EmbedBuilder, MessageFlags, SlashCommandBuilder } = require('discord.js'
 const { db, queries, addCoins } = require('../database/db');
 const { SHOP_ITEMS, KEY_HOURS } = require('./shop');
 
+const LIMITED_ACCESS_ROLE_ID = process.env.LIMITED_ACCESS_ROLE_ID || '1424919985209217024';
+
 const itemChoices = [
   ...KEY_HOURS.map((hours) => {
     const item = SHOP_ITEMS[`key_${hours}h`];
@@ -78,34 +80,59 @@ async function buyProtector(interaction) {
 
 async function buyKey(interaction, item, licenseApi) {
   chargeItem(interaction.user.id, item.id);
-  let licenseGenerated = false;
+  let licenseCommitted = false;
   try {
-    const result = await licenseApi.generateGiveaway({
+    const result = await licenseApi.purchaseShop({
+      discordUserId: interaction.user.id,
+      discordUsername: interaction.user.tag,
       hours: item.hours,
-      count: 1,
-      createdBy: interaction.user.id,
-      source: `shop_${item.id}`
+      zcoinsSpent: item.price
     });
-    const licenseKey = result?.licenses?.[0]?.licenseKey;
+    const license = result?.license;
+    const licenseKey = license?.licenseKey;
     if (!licenseKey) throw new Error('El servidor no devolvió una Key válida.');
-    licenseGenerated = true;
+    licenseCommitted = true;
+
+    const member = await interaction.guild.members.fetch(interaction.user.id);
+    const limitedRole = interaction.guild.roles.cache.get(LIMITED_ACCESS_ROLE_ID)
+      || await interaction.guild.roles.fetch(LIMITED_ACCESS_ROLE_ID).catch(() => null);
+    let roleAssigned = false;
+    if (limitedRole && !member.roles.cache.has(limitedRole.id)) {
+      try {
+        await member.roles.add(limitedRole, 'Licencia comprada con ZCoins en Zentux Shop');
+        roleAssigned = true;
+      } catch (error) {
+        console.error(`No se pudo asignar Limited Access a ${interaction.user.id}:`, error.message);
+      }
+    } else if (limitedRole) {
+      roleAssigned = true;
+    }
+
     const user = queries.getUser.get(interaction.user.id);
+    const expirationTimestamp = Math.floor(new Date(license.paidUntil).getTime() / 1000);
+    const purchaseDescription = result.extended
+      ? `Se agregaron **${item.hours} hora${item.hours === 1 ? '' : 's'}** a tu Key actual.\n\nConservas la misma Key:\n\`${licenseKey}\``
+      : `Se creó y vinculó una **Key de ${item.hours} hora${item.hours === 1 ? '' : 's'}** a tu perfil.\n\nTu Key privada:\n\`${licenseKey}\``;
 
     const embed = new EmbedBuilder()
       .setColor(0x22c55e)
-      .setTitle('🔑 Compra completada')
-      .setDescription(
-        `Compraste una **Key de ${item.hours} hora${item.hours === 1 ? '' : 's'}**.\n\nTu Key privada:\n\`${licenseKey}\``
-      )
+      .setTitle(result.extended ? '⏳ Tiempo agregado a tu Key' : '🔑 Key vinculada a tu perfil')
+      .setDescription(purchaseDescription)
       .addFields(
         { name: 'Precio', value: `🪙 ${item.price.toLocaleString('es-ES')} ZCoins`, inline: true },
         { name: 'Bolsillo restante', value: `🪙 ${user.zcoins.toLocaleString('es-ES')}`, inline: true },
-        { name: 'Activación', value: 'Usa `/canjear codigo:<KEY>` y no compartas esta Key.' }
+        { name: 'Vencimiento', value: `<t:${expirationTimestamp}:F> (<t:${expirationTimestamp}:R>)` },
+        {
+          name: 'Perfil y acceso',
+          value: roleAssigned
+            ? `Ya aparece en \`/info\` y recibiste <@&${LIMITED_ACCESS_ROLE_ID}>. No necesitas usar \`/canjear\`.`
+            : 'La Key ya aparece en `/info`. El rol se asignará automáticamente en la próxima sincronización.'
+        }
       )
       .setTimestamp();
     await interaction.editReply({ embeds: [embed] });
   } catch (error) {
-    if (!licenseGenerated) {
+    if (!licenseCommitted) {
       refundItem(interaction.user.id, item);
       error.purchaseRefunded = true;
     }
@@ -139,8 +166,11 @@ async function execute(interaction, { licenseApi } = {}) {
       return;
     }
     if (error.purchaseRefunded) {
+      const message = error.code === 'user_has_license'
+        ? 'Ya tienes otra licencia activa que no pertenece a Zentux Shop. No se cobraron ZCoins.'
+        : `No se pudo procesar la licencia. Se reembolsaron automáticamente ${item.price} ZCoins a tu bolsillo.`;
       await interaction.editReply({
-        content: `No se pudo generar la Key. Se reembolsaron automáticamente ${item.price} ZCoins a tu bolsillo.`,
+        content: message,
         embeds: []
       });
       return;
@@ -149,4 +179,4 @@ async function execute(interaction, { licenseApi } = {}) {
   }
 }
 
-module.exports = { data, execute, chargeItem, refundItem };
+module.exports = { data, execute, buyKey, chargeItem, refundItem };

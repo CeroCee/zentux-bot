@@ -35,7 +35,7 @@ async function execute(interaction) {
     .setColor(0x7c3aed)
     .setTitle('🛒 Tienda Zentux')
     .setDescription(
-      'Todas las Keys cuestan **175 ZCoins por hora**. Compra con `/redeem item_id:<ID>`; la entrega será privada.'
+      'Todas las Keys cuestan **175 ZCoins por hora**. Compra con `/redeem item_id:<ID>`; la licencia se vinculará automáticamente a `/info`. Si ya tienes una Key activa de la Shop, la compra agregará tiempo a esa misma Key.'
     )
     .addFields(
       { name: 'Catálogo de Keys de Software', value: keyCatalog },

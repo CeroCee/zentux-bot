@@ -39,6 +39,7 @@ if (missingEnvironment.length > 0) {
 
 const GUILD_ID = process.env.GUILD_ID;
 const BUYER_ROLE_ID = process.env.BUYER_ROLE_ID;
+const LIMITED_ACCESS_ROLE_ID = process.env.LIMITED_ACCESS_ROLE_ID || '1424919985209217024';
 const CONTENT_CREATOR_ROLE_ID = process.env.CONTENT_CREATOR_ROLE_ID || '1392619993153142834';
 const SYNC_MINUTES = Math.max(1, Number.parseInt(process.env.LICENSE_SYNC_MINUTES || '5', 10) || 5);
 const PURCHASE_SYNC_SECONDS = Math.max(15, Number.parseInt(process.env.PURCHASE_SYNC_SECONDS || '30', 10) || 30);
@@ -176,6 +177,7 @@ function paymentMethod(license) {
     roblox: 'Robux',
     stripe: 'Stripe',
     giveaway: 'Regalo',
+    shop: 'Zentux Shop',
     custom: 'Licencia personalizada',
     content_creator: 'Beneficio Content Creator',
     paid: 'Compra directa'
@@ -184,6 +186,7 @@ function paymentMethod(license) {
 
 function licenseOrigin(license) {
   if (license.source === 'content_creator') return 'Content Creator';
+  if (license.source === 'shop') return 'Zentux Shop';
   if (license.source === 'giveaway') return 'Regalada';
   if (license.source === 'custom') return 'Personalizada';
   return 'Comprada';
@@ -193,12 +196,14 @@ function formatPayment(license) {
   if (['giveaway', 'custom', 'content_creator'].includes(license.source)) return 'Gratis';
   if (!Number.isFinite(license.paymentAmount)) return 'No disponible';
   if (license.paymentCurrency === 'robux') return `${license.paymentAmount.toLocaleString('en-US')} Robux`;
+  if (license.paymentCurrency === 'zcoins') return `${license.paymentAmount.toLocaleString('es-ES')} ZCoins`;
   const currency = String(license.paymentCurrency || 'usd').toUpperCase();
   return new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(license.paymentAmount / 100);
 }
 
 function formatPlan(license) {
   if (license.source === 'content_creator') return 'Mientras conserve el rol';
+  if (license.durationHours) return `${license.durationHours} hora(s)`;
   if (!license.durationDays) return 'No disponible';
   return license.durationDays === 365 ? 'Anual (365 dias)' : `${license.durationDays} dia(s)`;
 }
@@ -236,6 +241,27 @@ async function getGuildAndRole() {
   return { guild, role };
 }
 
+async function getLimitedAccessRole(guild) {
+  const role = guild.roles.cache.get(LIMITED_ACCESS_ROLE_ID)
+    || await guild.roles.fetch(LIMITED_ACCESS_ROLE_ID);
+  if (!role) throw new Error('No se encontro LIMITED_ACCESS_ROLE_ID en el servidor.');
+  const botMember = guild.members.me || await guild.members.fetchMe();
+  if (!botMember.permissions.has(PermissionFlagsBits.ManageRoles)) {
+    throw new Error('El bot no tiene el permiso Manage Roles.');
+  }
+  if (botMember.roles.highest.comparePositionTo(role) <= 0) {
+    throw new Error('El rol del bot debe estar por encima de Zentux | Limited Access.');
+  }
+  return role;
+}
+
+function hasLicenseAccessRole(member) {
+  return Boolean(
+    member?.roles.cache.has(BUYER_ROLE_ID)
+    || member?.roles.cache.has(LIMITED_ACCESS_ROLE_ID)
+  );
+}
+
 function licenseErrorMessage(error) {
   const messages = {
     not_found: 'Ese codigo no existe.',
@@ -265,24 +291,42 @@ async function handleRedeem(interaction) {
   await interaction.deferReply({ flags: EPHEMERAL });
   try {
     const code = interaction.options.getString('codigo', true).trim().toUpperCase();
+    const member = await interaction.guild.members.fetch(interaction.user.id);
+    if (
+      member.roles.cache.has(LIMITED_ACCESS_ROLE_ID)
+      && !code.startsWith('ZENTUX-SHOP-')
+    ) {
+      return interaction.editReply({
+        content: 'Las cuentas con **Zentux | Limited Access** solo pueden usar `/canjear` con una Key comprada en Zentux Shop.'
+      });
+    }
+
     const data = await licenseApi.redeem({
       licenseKey: code,
       discordUserId: interaction.user.id,
       discordUsername: interaction.user.tag
     });
 
-    const { role } = await getGuildAndRole();
-    const member = await interaction.guild.members.fetch(interaction.user.id);
-    if (!member.roles.cache.has(role.id)) {
-      await member.roles.add(role, 'Licencia Zentux canjeada y activa');
+    const license = data.license;
+    let grantedRole;
+    if (license.source === 'shop') {
+      grantedRole = await getLimitedAccessRole(interaction.guild);
+      if (!member.roles.cache.has(grantedRole.id)) {
+        await member.roles.add(grantedRole, 'Licencia de Zentux Shop activa');
+      }
+    } else {
+      const { role } = await getGuildAndRole();
+      grantedRole = role;
+      if (!member.roles.cache.has(role.id)) {
+        await member.roles.add(role, 'Licencia Zentux canjeada y activa');
+      }
     }
     redeemAttempts.delete(interaction.user.id);
 
-    const license = data.license;
     const embed = brandEmbed({
       color: COLORS.success,
       title: '✅ Licencia canjeada correctamente',
-      description: `Tu licencia fue verificada y recibiste el rol **${role.name}**.`
+      description: `Tu licencia fue verificada y recibiste el rol **${grantedRole.name}**.`
     })
       .addFields(
         { name: '🟢 Estado', value: '**Activa**', inline: true },
@@ -343,14 +387,18 @@ async function handleInfo(interaction) {
     }
 
     const targetMember = await interaction.guild.members.fetch(targetUser.id).catch(() => null);
-    if (!targetMember?.roles.cache.has(BUYER_ROLE_ID)) {
-      return interaction.editReply({ content: 'Esa persona no es un comprador activo de Zentux.' });
+    if (!hasLicenseAccessRole(targetMember)) {
+      return interaction.editReply({ content: 'Esa persona no tiene un acceso de licencia activo en Zentux.' });
     }
 
     const data = await licenseApi.info(targetUser.id);
     const license = data.license;
     if (!license.active) {
-      await targetMember.roles.remove(BUYER_ROLE_ID, 'Licencia Zentux inactiva o vencida').catch(() => null);
+      const expiredRoleId = license.source === 'shop'
+        || license.licenseKey?.startsWith('ZENTUX-SHOP-')
+        ? LIMITED_ACCESS_ROLE_ID
+        : BUYER_ROLE_ID;
+      await targetMember.roles.remove(expiredRoleId, 'Licencia Zentux inactiva o vencida').catch(() => null);
     }
 
     const embed = brandEmbed({
@@ -469,13 +517,13 @@ async function handleReleaseCommand(interaction) {
       return interaction.editReply({ content: 'No tienes permiso para liberar licencias de otros compradores.' });
     }
     targetUser = interaction.options.getUser('usuario', true);
-  } else if (!callerMember.roles.cache.has(BUYER_ROLE_ID)) {
-    return interaction.editReply({ content: 'Necesitas una licencia canjeada y el rol **Zentux | Buyer**.' });
+  } else if (!hasLicenseAccessRole(callerMember)) {
+    return interaction.editReply({ content: 'Necesitas una licencia activa de Zentux.' });
   }
 
   const targetMember = await interaction.guild.members.fetch(targetUser.id).catch(() => null);
-  if (!targetMember?.roles.cache.has(BUYER_ROLE_ID)) {
-    return interaction.editReply({ content: 'Esa persona no tiene una licencia activa con el rol **Zentux | Buyer**.' });
+  if (!hasLicenseAccessRole(targetMember)) {
+    return interaction.editReply({ content: 'Esa persona no tiene un rol de licencia activa.' });
   }
 
   const data = await licenseApi.info(targetUser.id);
@@ -904,18 +952,30 @@ async function syncBuyerRoles() {
       getGuildAndRole(),
       licenseApi.members()
     ]);
+    const limitedRole = await getLimitedAccessRole(guild);
 
     let added = 0;
     let removed = 0;
     for (const record of data.members || []) {
       const member = await guild.members.fetch(record.discordUserId).catch(() => null);
       if (!member) continue;
-      const hasRole = member.roles.cache.has(role.id);
-      if (record.active && !hasRole) {
-        await member.roles.add(role, 'Sincronizacion de licencia Zentux activa');
+
+      const isShopLicense = record.source === 'shop';
+      const expectedRole = isShopLicense ? limitedRole : role;
+      const otherRole = isShopLicense ? role : limitedRole;
+      const hasExpectedRole = member.roles.cache.has(expectedRole.id);
+      const hasOtherRole = member.roles.cache.has(otherRole.id);
+
+      if (record.active && !hasExpectedRole) {
+        await member.roles.add(expectedRole, 'Sincronizacion de licencia Zentux activa');
         added += 1;
-      } else if (!record.active && hasRole) {
-        await member.roles.remove(role, 'Licencia Zentux vencida, inactiva o eliminada');
+      } else if (!record.active && hasExpectedRole) {
+        await member.roles.remove(expectedRole, 'Licencia Zentux vencida, inactiva o eliminada');
+        removed += 1;
+      }
+
+      if (hasOtherRole) {
+        await member.roles.remove(otherRole, 'Ajuste del tipo de acceso de la licencia Zentux');
         removed += 1;
       }
     }
