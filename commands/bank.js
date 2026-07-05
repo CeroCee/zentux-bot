@@ -1,5 +1,4 @@
 const { EmbedBuilder, MessageFlags, SlashCommandBuilder } = require('discord.js');
-const { depositCoins, withdrawCoins } = require('../database/db');
 
 function amountOption(option) {
   return option
@@ -25,14 +24,16 @@ const data = new SlashCommandBuilder()
       .addStringOption(amountOption)
   );
 
-async function execute(interaction) {
+async function execute(interaction, { licenseApi } = {}) {
   const action = interaction.options.getSubcommand(true);
   const amount = interaction.options.getString('cantidad', true).trim().toLowerCase();
 
   try {
-    const result = action === 'deposit'
-      ? depositCoins(interaction.user.id, amount)
-      : withdrawCoins(interaction.user.id, amount);
+    const result = await licenseApi.economyBank({
+      discordUserId: interaction.user.id,
+      direction: action,
+      amount
+    });
     const isDeposit = action === 'deposit';
     const embed = new EmbedBuilder()
       .setColor(0x3b82f6)
@@ -48,10 +49,8 @@ async function execute(interaction) {
     await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
   } catch (error) {
     const messages = {
-      INVALID_AMOUNT: 'Usa un número entero positivo o `all`.',
-      NO_FUNDS: 'No tienes fondos disponibles para realizar ese movimiento.',
-      INSUFFICIENT_POCKET: 'No tienes suficientes ZCoins en el bolsillo.',
-      INSUFFICIENT_BANK: 'No tienes suficientes ZCoins en el banco.'
+      invalid_amount: 'Usa un número positivo o `all`.',
+      insufficient_funds: 'No tienes suficientes Z-Coins para realizar ese movimiento.'
     };
     if (!messages[error.code]) throw error;
     await interaction.reply({ content: messages[error.code], flags: MessageFlags.Ephemeral });

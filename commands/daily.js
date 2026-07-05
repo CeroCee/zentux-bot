@@ -13,7 +13,7 @@ const data = new SlashCommandBuilder()
 
 const updateDailyQuery = db.prepare(`
   UPDATE users
-  SET zcoins = zcoins + ?, streak_days = ?, last_daily_claim = ?, streak_protector = ?
+  SET streak_days = ?, last_daily_claim = ?, streak_protector = ?
   WHERE userId = ?
 `);
 
@@ -65,8 +65,7 @@ const claimDailyTransaction = db.transaction((userId, nowIso) => {
   if (streak < 1) streak = 1;
   const rewardDay = Math.min(streak, DAILY_REWARDS.length);
   const reward = DAILY_REWARDS[rewardDay - 1];
-  updateDailyQuery.run(reward, streak, nowIso, protector, userId);
-  queries.registerCoinLog.run(userId, reward, `Recompensa diaria: dia ${rewardDay}`);
+  updateDailyQuery.run(streak, nowIso, protector, userId);
   const xpResult = addXp(userId, DAILY_XP, 'Recompensa diaria');
   setCooldown(userId, 'daily', DAY_MS / 1000, nowMs);
 
@@ -88,7 +87,7 @@ function claimDaily(userId, now = new Date()) {
   return claimDailyTransaction(String(userId), new Date(nowMs).toISOString());
 }
 
-async function execute(interaction) {
+async function execute(interaction, { licenseApi } = {}) {
   const result = claimDaily(interaction.user.id);
   if (!result.claimed) {
     const timestamp = Math.floor(new Date(result.nextClaimAt).getTime() / 1000);
@@ -98,6 +97,15 @@ async function execute(interaction) {
     });
     return;
   }
+
+  const wallet = await licenseApi.economyAdd({
+    discordUserId: interaction.user.id,
+    amount: result.reward,
+    currency: 'zcoins',
+    bucket: 'pocket',
+    reason: `Recompensa diaria: dia ${result.rewardDay}`,
+    referenceId: `daily:${interaction.user.id}:${new Date().toISOString().slice(0, 10)}`
+  });
 
   const nextTimestamp = Math.floor(new Date(result.nextClaimAt).getTime() / 1000);
   const protectionText = result.protectorUsed
@@ -111,7 +119,7 @@ async function execute(interaction) {
     )
     .addFields(
       { name: 'Racha actual', value: `🔥 ${result.user.streak_days} día(s)`, inline: true },
-      { name: 'Balance', value: `🪙 ${result.user.zcoins.toLocaleString('es-ES')}`, inline: true },
+      { name: 'Balance', value: `🪙 ${wallet.user.zcoins.toLocaleString('es-ES')}`, inline: true },
       {
         name: 'Nivel',
         value: `⭐ ${result.user.level}${result.levelsGained ? ' — ¡Subiste de nivel!' : ''}`,

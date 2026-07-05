@@ -462,6 +462,10 @@ function getCoinLogs(userId, limit = 25) {
   return queries.getCoinLogs.all(normalizedUserId, normalizedLimit);
 }
 
+function listUsersForMigration() {
+  return db.prepare('SELECT userId, zcoins, bank FROM users').all();
+}
+
 function closeDatabase() {
   if (db.open) {
     db.close();
@@ -489,5 +493,6 @@ module.exports = {
   xpForNextLevel,
   registerCoinLog,
   getCoinLogs,
+  listUsersForMigration,
   closeDatabase
 };

@@ -113,7 +113,7 @@ const data = new SlashCommandBuilder()
       .setRequired(false)
   );
 
-async function execute(interaction) {
+async function execute(interaction, { licenseApi } = {}) {
   const target = interaction.options.getUser('usuario', true);
   const action = interaction.options.getString('accion', true);
   const destination = interaction.options.getString('destino', true);
@@ -122,14 +122,28 @@ async function execute(interaction) {
   const adminName = interaction.member?.displayName || interaction.user.username;
 
   try {
-    const result = modifyMoney({
-      adminName,
-      targetId: target.id,
-      action,
-      destination,
-      amount,
-      reason
+    const beforeResponse = await licenseApi.economyUser({
+      discordUserId: target.id,
+      discordUsername: target.username,
+      discordAvatarUrl: target.displayAvatarURL({ size: 256 })
     });
+    const before = beforeResponse.user;
+    const current = destination === 'pocket' ? before.zcoins : before.bank;
+    const next = action === 'add' ? current + amount : action === 'remove' ? current - amount : amount;
+    if (next < 0) throw adminMoneyError('INSUFFICIENT_FUNDS', 'La operación dejaría el saldo en negativo.');
+    const delta = next - current;
+    const defaultReason = `${action} ${amount} en ${destination}`;
+    const auditReason = `[Admin: ${adminName}] ${String(reason || '').trim() || defaultReason}`;
+    const response = delta === 0
+      ? beforeResponse
+      : await licenseApi.economyAdd({
+          discordUserId: target.id,
+          amount: delta,
+          currency: 'zcoins',
+          bucket: destination,
+          reason: auditReason
+        });
+    const result = { before, user: response.user, delta, auditReason };
     const destinationLabel = destination === 'pocket' ? 'Bolsillo' : 'Banco';
     const newBalance = destination === 'pocket' ? result.user.zcoins : result.user.bank;
     const embed = new EmbedBuilder()

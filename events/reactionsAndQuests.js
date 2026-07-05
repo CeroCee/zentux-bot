@@ -2,7 +2,6 @@ const { Events } = require('discord.js');
 const config = require('../config.json');
 const {
   db,
-  addCoins,
   addXp,
   getOrCreateUser,
   incrementReactions
@@ -74,12 +73,11 @@ const createComboMarkerQuery = db.prepare(`
   VALUES (?, ?, 1, 1, ?)
 `);
 
-const getReactionEarningsQuery = db.prepare(`
-  SELECT COALESCE(SUM(amount), 0) AS total
-  FROM coin_logs
+const getReactionClaimsTodayQuery = db.prepare(`
+  SELECT COUNT(*) AS total
+  FROM reaction_claims
   WHERE userId = ?
-    AND reason = ?
-    AND DATE(timestamp) = ?
+    AND DATE(claimed_at) = ?
 `);
 
 const claimReactionQuery = db.prepare(`
@@ -153,7 +151,6 @@ const checkQuestsTransaction = db.transaction((userId, type, amount) => {
     && !findQuestQuery.get(normalizedUserId, COMBO_QUEST_ID, date)
   ) {
     createComboMarkerQuery.run(normalizedUserId, COMBO_QUEST_ID, date);
-    addCoins(normalizedUserId, COMBO_REWARD, COMBO_REASON);
     addXp(normalizedUserId, COMBO_XP, 'Combo diario completado');
     comboAwarded = true;
   }
@@ -169,7 +166,7 @@ function checkQuests(userId, type, amount) {
   return checkQuestsTransaction(userId, type, amount);
 }
 
-const rewardReactionTransaction = db.transaction((userId, messageId) => {
+const prepareReactionReward = db.transaction((userId, messageId) => {
   const normalizedUserId = normalizeUserId(userId);
   const normalizedMessageId = String(messageId || '').trim();
   if (!normalizedMessageId) throw new TypeError('messageId es obligatorio.');
@@ -182,15 +179,13 @@ const rewardReactionTransaction = db.transaction((userId, messageId) => {
   incrementReactions(normalizedUserId, 1);
 
   const date = currentDate();
-  const earned = Number(
-    getReactionEarningsQuery.get(normalizedUserId, REACTION_REASON, date).total
-  );
+  const rewardedClaims = Number(getReactionClaimsTodayQuery.get(normalizedUserId, date).total);
+  const earned = Math.max(0, (rewardedClaims - 1) * REACTION_REWARD);
 
   if (earned >= MAX_DAILY_REACTION_REWARD) {
     return { rewarded: false, duplicate: false, earned, quest: null };
   }
 
-  addCoins(normalizedUserId, REACTION_REWARD, REACTION_REASON);
   const xp = addXp(normalizedUserId, REACTION_XP, REACTION_REASON);
   const quest = checkQuests(normalizedUserId, 'reaction');
 
@@ -202,6 +197,30 @@ const rewardReactionTransaction = db.transaction((userId, messageId) => {
     quest
   };
 });
+
+async function rewardReactionTransaction(userId, messageId, licenseApi) {
+  const result = prepareReactionReward(userId, messageId);
+  if (!result.rewarded) return result;
+  await licenseApi.economyAdd({
+    discordUserId: userId,
+    amount: REACTION_REWARD,
+    currency: 'zcoins',
+    bucket: 'pocket',
+    reason: REACTION_REASON,
+    referenceId: `reaction:${userId}:${messageId}`
+  });
+  if (result.quest?.comboAwarded) {
+    await licenseApi.economyAdd({
+      discordUserId: userId,
+      amount: COMBO_REWARD,
+      currency: 'zcoins',
+      bucket: 'pocket',
+      reason: COMBO_REASON,
+      referenceId: `combo:${userId}:${result.quest.date}`
+    });
+  }
+  return result;
+}
 
 function parseRewardsStartAt(value) {
   const timestamp = Date.parse(String(value || '').trim());
@@ -216,7 +235,7 @@ function isMessageEligible(message, rewardsStartAt) {
     && message.createdTimestamp >= rewardsStartAt;
 }
 
-async function handleReaction(reaction, user, announcementChannelId, rewardsStartAt) {
+async function handleReaction(reaction, user, announcementChannelId, rewardsStartAt, licenseApi) {
   if (!announcementChannelId) return;
 
   if (user.partial) {
@@ -239,7 +258,7 @@ async function handleReaction(reaction, user, announcementChannelId, rewardsStar
   if (reaction.message.channelId !== announcementChannelId) return;
   if (!isMessageEligible(reaction.message, rewardsStartAt)) return;
 
-  const result = rewardReactionTransaction(user.id, reaction.message.id);
+  const result = await rewardReactionTransaction(user.id, reaction.message.id, licenseApi);
   if (result.quest?.comboAwarded) {
     console.log(`Combo diario otorgado a ${user.id}: +${COMBO_REWARD} ZCoins.`);
   }
@@ -261,7 +280,7 @@ function register(client) {
   );
 
   client.on(Events.MessageReactionAdd, (reaction, user) => {
-    handleReaction(reaction, user, announcementChannelId, rewardsStartAt).catch((error) => {
+    handleReaction(reaction, user, announcementChannelId, rewardsStartAt, client.licenseApi).catch((error) => {
       console.error('Error procesando reaccion de anuncios:', error);
     });
   });

@@ -66,11 +66,22 @@ async function displayName(client, userId) {
   return user ? `@${user.username}` : `Usuario ${userId}`;
 }
 
-async function execute(interaction) {
+async function execute(interaction, { licenseApi } = {}) {
   const categoryId = interaction.options.getString('categoria', true);
   const category = CATEGORIES[categoryId];
-  const current = getLeaderboardPosition(categoryId, interaction.user.id);
-  const leaders = getLeaderboard(categoryId, 10);
+  let current;
+  let leaders;
+  if (categoryId === 'wealth') {
+    const remote = await licenseApi.economyLeaderboard(100);
+    leaders = remote.leaders.slice(0, 10);
+    const index = remote.leaders.findIndex((entry) => entry.userId === interaction.user.id);
+    current = index >= 0
+      ? { position: index + 1, score: remote.leaders[index].score }
+      : { position: '100+', score: 0 };
+  } else {
+    current = getLeaderboardPosition(categoryId, interaction.user.id);
+    leaders = getLeaderboard(categoryId, 10);
+  }
   const names = await Promise.all(
     leaders.map((entry) => displayName(interaction.client, entry.userId))
   );

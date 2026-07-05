@@ -11,11 +11,17 @@ const data = new SlashCommandBuilder()
       .setRequired(false)
   );
 
-async function execute(interaction) {
+async function execute(interaction, { licenseApi } = {}) {
   const target = interaction.options.getUser('usuario') || interaction.user;
-  const user = getOrCreateUser(target.id);
-  const requiredXp = xpForNextLevel(user.level);
-  const filled = Math.min(10, Math.floor((user.xp / requiredXp) * 10));
+  const localUser = getOrCreateUser(target.id);
+  const response = await licenseApi.economyUser({
+    discordUserId: target.id,
+    discordUsername: target.username,
+    discordAvatarUrl: target.displayAvatarURL({ size: 256 })
+  });
+  const user = response.user;
+  const requiredXp = xpForNextLevel(localUser.level);
+  const filled = Math.min(10, Math.floor((localUser.xp / requiredXp) * 10));
   const progressBar = `${'▰'.repeat(filled)}${'▱'.repeat(10 - filled)}`;
 
   const embed = new EmbedBuilder()
@@ -33,9 +39,10 @@ async function execute(interaction) {
         value: `💰 **${(user.zcoins + user.bank).toLocaleString('es-ES')}**`,
         inline: true
       },
-      { name: 'Racha diaria', value: `🔥 **${user.streak_days} día(s)**`, inline: true },
-      { name: 'Nivel', value: `⭐ **${user.level}**`, inline: true },
-      { name: 'Experiencia', value: `✨ **${user.xp}/${requiredXp} XP**\n${progressBar}` }
+      { name: 'Zenitx comprados', value: `💜 **${user.zenitx.toLocaleString('es-ES')}**`, inline: true },
+      { name: 'Racha diaria', value: `🔥 **${localUser.streak_days} día(s)**`, inline: true },
+      { name: 'Nivel', value: `⭐ **${localUser.level}**`, inline: true },
+      { name: 'Experiencia', value: `✨ **${localUser.xp}/${requiredXp} XP**\n${progressBar}` }
     )
     .setFooter({ text: 'Zentux Economy' })
     .setTimestamp();

@@ -44,12 +44,27 @@ async function fetchInviteSnapshot(guild) {
   return snapshotInvites(invites);
 }
 
-const rewardInviteTransaction = db.transaction((inviterId) => {
+const prepareInviteReward = db.transaction((inviterId) => {
   const quest = checkQuests(inviterId, 'invite');
   const xp = addXp(inviterId, INVITE_XP, 'Invitación verificada');
   const user = incrementInvites(inviterId, 1);
   return { quest, xp, user };
 });
+
+async function rewardInviteTransaction(inviterId, licenseApi) {
+  const result = prepareInviteReward(inviterId);
+  if (result.quest.comboAwarded) {
+    await licenseApi.economyAdd({
+      discordUserId: inviterId,
+      amount: 100,
+      currency: 'zcoins',
+      bucket: 'pocket',
+      reason: 'Combo diario: 3 misiones completadas',
+      referenceId: `combo:${inviterId}:${result.quest.date}`
+    });
+  }
+  return result;
+}
 
 async function handleMemberJoin(member) {
   if (member.user.bot) return null;
@@ -66,7 +81,7 @@ async function handleMemberJoin(member) {
   const inviter = await member.guild.members.fetch(inviterId).catch(() => null);
   if (!inviter || inviter.user.bot) return null;
 
-  const result = rewardInviteTransaction(inviterId);
+  const result = await rewardInviteTransaction(inviterId, member.client.licenseApi);
   console.log(
     `Invitación verificada: ${inviter.user.tag} invitó a ${member.user.tag} con ${usedInvite.code}.`
   );

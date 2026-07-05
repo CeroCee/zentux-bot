@@ -101,7 +101,7 @@ function attemptRob(robberId, victimId, options = {}) {
   );
 }
 
-async function execute(interaction) {
+async function execute(interaction, { licenseApi } = {}) {
   const victim = interaction.options.getUser('usuario', true);
   if (victim.bot) {
     await interaction.reply({ content: 'No puedes robarle a un bot.', flags: MessageFlags.Ephemeral });
@@ -109,7 +109,20 @@ async function execute(interaction) {
   }
 
   try {
-    const result = attemptRob(interaction.user.id, victim.id);
+    const remainingMs = getCooldown(interaction.user.id, 'rob');
+    if (remainingMs !== null) {
+      const error = robError('COOLDOWN', 'Todavía estás en cooldown.', {
+        retryAt: new Date(Date.now() + remainingMs).toISOString()
+      });
+      throw error;
+    }
+    const response = await licenseApi.economyRob({
+      robberId: interaction.user.id,
+      victimId: victim.id
+    });
+    const result = response.result;
+    setCooldown(interaction.user.id, 'rob', ROB_COOLDOWN_SECONDS);
+    result.nextAttemptAt = new Date(Date.now() + ROB_COOLDOWN_MS).toISOString();
     const nextTimestamp = Math.floor(new Date(result.nextAttemptAt).getTime() / 1000);
     const embed = new EmbedBuilder()
       .setColor(result.success ? 0x22c55e : 0xef4444)
@@ -128,8 +141,11 @@ async function execute(interaction) {
   } catch (error) {
     const messages = {
       SELF_ROB: 'No puedes robarte a ti mismo.',
+      same_user: 'No puedes robarte a ti mismo.',
       ROBBER_TOO_POOR: 'Necesitas al menos 100 ZCoins en el bolsillo para arriesgarte.',
-      VICTIM_TOO_POOR: 'Ese usuario necesita al menos 100 ZCoins en el bolsillo para poder ser robado.'
+      robber_too_poor: 'Necesitas al menos 100 ZCoins en el bolsillo para arriesgarte.',
+      VICTIM_TOO_POOR: 'Ese usuario necesita al menos 100 ZCoins en el bolsillo para poder ser robado.',
+      victim_too_poor: 'Ese usuario necesita al menos 100 ZCoins en el bolsillo para poder ser robado.'
     };
     if (error.code === 'COOLDOWN') {
       const timestamp = Math.floor(new Date(error.retryAt).getTime() / 1000);

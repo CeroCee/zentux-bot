@@ -2,7 +2,6 @@ const { ChannelType, Events } = require('discord.js');
 const config = require('../config.json');
 const {
   db,
-  addCoins,
   addXp,
   getOrCreateUser,
   incrementVoiceMinutes
@@ -17,7 +16,7 @@ const XP_INTERVAL_MINUTES = 5;
 const eligibleSince = new Map();
 const registeredClients = new WeakSet();
 
-const rewardVoiceTransaction = db.transaction((userId, minutes = 1) => {
+const prepareVoiceReward = db.transaction((userId, minutes = 1) => {
   const normalizedMinutes = Number(minutes);
   if (!Number.isSafeInteger(normalizedMinutes) || normalizedMinutes <= 0) {
     throw new TypeError('Los minutos de voz deben ser un entero positivo.');
@@ -26,9 +25,8 @@ const rewardVoiceTransaction = db.transaction((userId, minutes = 1) => {
   const before = getOrCreateUser(userId);
   const coins = normalizedMinutes * COINS_PER_MINUTE;
   const reason = `Voice Grind: ${normalizedMinutes} minuto(s) en voz`;
-  addCoins(userId, coins, reason);
   const afterVoice = incrementVoiceMinutes(userId, normalizedMinutes);
-  checkQuests(userId, 'voice', normalizedMinutes);
+  const quest = checkQuests(userId, 'voice', normalizedMinutes);
 
   const previousXpSteps = Math.floor(before.total_vc_minutes / XP_INTERVAL_MINUTES);
   const currentXpSteps = Math.floor(afterVoice.total_vc_minutes / XP_INTERVAL_MINUTES);
@@ -39,9 +37,33 @@ const rewardVoiceTransaction = db.transaction((userId, minutes = 1) => {
     coins,
     minutes: normalizedMinutes,
     xpEarned,
+    quest,
     user: getOrCreateUser(userId)
   };
 });
+
+async function rewardVoiceTransaction(userId, minutes, licenseApi, referenceId) {
+  const result = prepareVoiceReward(userId, minutes);
+  await licenseApi.economyAdd({
+    discordUserId: userId,
+    amount: result.coins,
+    currency: 'zcoins',
+    bucket: 'pocket',
+    reason: `Voice Grind: ${result.minutes} minuto(s) en voz`,
+    referenceId
+  });
+  if (result.quest?.comboAwarded) {
+    await licenseApi.economyAdd({
+      discordUserId: userId,
+      amount: 100,
+      currency: 'zcoins',
+      bucket: 'pocket',
+      reason: 'Combo diario: 3 misiones completadas',
+      referenceId: `combo:${userId}:${result.quest.date}`
+    });
+  }
+  return result;
+}
 
 function authorizedChannelIds() {
   return new Set(
@@ -159,7 +181,7 @@ function refreshChannel(channel, scope, now = Date.now()) {
   }
 }
 
-function creditElapsedVoiceTime(voiceState, now = Date.now()) {
+async function creditElapsedVoiceTime(voiceState, licenseApi, now = Date.now()) {
   const key = trackingKey(voiceState);
   const startedAt = eligibleSince.get(key);
   if (!startedAt) return null;
@@ -167,12 +189,17 @@ function creditElapsedVoiceTime(voiceState, now = Date.now()) {
   const completedMinutes = Math.floor((now - startedAt) / ONE_MINUTE_MS);
   if (completedMinutes < 1) return null;
 
-  const result = rewardVoiceTransaction(voiceState.id, completedMinutes);
+  const result = await rewardVoiceTransaction(
+    voiceState.id,
+    completedMinutes,
+    licenseApi,
+    `voice:${voiceState.guild.id}:${voiceState.id}:${startedAt}:${completedMinutes}`
+  );
   eligibleSince.set(key, startedAt + (completedMinutes * ONE_MINUTE_MS));
   return result;
 }
 
-function handleVoiceStateUpdate(oldState, newState, scope, now = Date.now()) {
+async function handleVoiceStateUpdate(oldState, newState, scope, licenseApi, now = Date.now()) {
   const key = trackingKey(newState);
   const wasEligible = isEligible(oldState, scope);
   const isNowEligible = isEligible(newState, scope);
@@ -184,7 +211,7 @@ function handleVoiceStateUpdate(oldState, newState, scope, now = Date.now()) {
 
   if (wasEligible && !isNowEligible) {
     try {
-      creditElapsedVoiceTime(oldState, now);
+      await creditElapsedVoiceTime(oldState, licenseApi, now);
     } catch (error) {
       console.error(`No se pudo cerrar la sesion de voz de ${oldState.id}:`, error.message);
     } finally {
@@ -222,7 +249,7 @@ async function checkVoiceRewards(client, scope, now = Date.now()) {
       activeKeys.add(key);
 
       try {
-        const result = creditElapsedVoiceTime(voiceState, now);
+        const result = await creditElapsedVoiceTime(voiceState, client.licenseApi, now);
         if (!result) continue;
         rewardedUsers += 1;
         creditedMinutes += result.minutes;
@@ -256,7 +283,9 @@ function register(client) {
   };
 
   client.on(Events.VoiceStateUpdate, (oldState, newState) => {
-    handleVoiceStateUpdate(oldState, newState, scope);
+    handleVoiceStateUpdate(oldState, newState, scope, client.licenseApi).catch((error) => {
+      console.error(`No se pudo cerrar una sesion de voz:`, error.message);
+    });
   });
 
   client.once(Events.ClientReady, async () => {

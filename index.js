@@ -75,6 +75,7 @@ const client = new Client({
     Partials.Reaction
   ]
 });
+client.licenseApi = licenseApi;
 
 function loadEvents(discordClient) {
   const eventsDirectory = path.join(__dirname, 'events');
@@ -988,6 +989,12 @@ async function syncBuyerRoles() {
 }
 
 client.once(Events.ClientReady, async (readyClient) => {
+  try {
+    const migration = await licenseApi.economyMigrate(database.listUsersForMigration());
+    console.log(`Economia central sincronizada: ${migration.migrated} usuario(s) migrados.`);
+  } catch (error) {
+    console.error('No se pudo migrar la economia local al servidor central:', error.message);
+  }
   console.log(`Bot listo como ${readyClient.user.tag}`);
   await syncApplicationCommands();
   readyClient.user.setPresence({
