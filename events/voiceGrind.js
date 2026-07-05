@@ -77,6 +77,14 @@ function configuredCategoryNames() {
   );
 }
 
+function configuredCategoryKeywords() {
+  return (Array.isArray(config.authorizedVoiceCategoryKeywords)
+    ? config.authorizedVoiceCategoryKeywords
+    : [])
+    .map(normalizeChannelName)
+    .filter(Boolean);
+}
+
 function isAuthorizedVoiceChannel(channel, scope) {
   if (!channel?.isVoiceBased()) return false;
   return scope.channelIds.has(channel.id)
@@ -101,13 +109,18 @@ async function createAuthorizedScope(client) {
   }
 
   const categoryNames = configuredCategoryNames();
-  if (categoryNames.size > 0) {
+  const categoryKeywords = configuredCategoryKeywords();
+  if (categoryNames.size > 0 || categoryKeywords.length > 0) {
     for (const guild of client.guilds.cache.values()) {
       const guildChannels = await guild.channels.fetch().catch(() => guild.channels.cache);
       for (const channel of guildChannels.values()) {
+        const normalizedName = normalizeChannelName(channel?.name);
         if (
           channel?.type === ChannelType.GuildCategory
-          && categoryNames.has(normalizeChannelName(channel.name))
+          && (
+            categoryNames.has(normalizedName)
+            || categoryKeywords.some((keyword) => normalizedName.includes(keyword))
+          )
         ) {
           scope.categoryIds.add(channel.id);
         }
