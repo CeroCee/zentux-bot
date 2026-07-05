@@ -3,10 +3,11 @@ const config = require('../config.json');
 const { db, addCoins, addXp, incrementVoiceMinutes } = require('../database/db');
 const { checkQuests } = require('./reactionsAndQuests');
 
-const CHECK_INTERVAL_MS = 10 * 60 * 1000;
-const VOICE_REWARD = 20;
-const VOICE_REWARD_REASON = 'Voice Grind: 10 minutos activos';
-const VOICE_XP = 10;
+const VOICE_INTERVAL_MINUTES = 15;
+const CHECK_INTERVAL_MS = VOICE_INTERVAL_MINUTES * 60 * 1000;
+const VOICE_REWARD = 5;
+const VOICE_REWARD_REASON = 'Voice Grind: 15 minutos activos';
+const VOICE_XP = 3;
 
 const eligibleSince = new Map();
 const registeredClients = new WeakSet();
@@ -14,7 +15,7 @@ const registeredClients = new WeakSet();
 const rewardVoiceTransaction = db.transaction((userId) => {
   addCoins(userId, VOICE_REWARD, VOICE_REWARD_REASON);
   addXp(userId, VOICE_XP, VOICE_REWARD_REASON);
-  incrementVoiceMinutes(userId, 10);
+  incrementVoiceMinutes(userId, VOICE_INTERVAL_MINUTES);
   checkQuests(userId, 'voice');
 });
 

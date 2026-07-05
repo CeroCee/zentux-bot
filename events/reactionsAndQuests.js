@@ -26,7 +26,7 @@ const DAILY_QUESTS = Object.freeze({
   voice: {
     id: 'daily_voice',
     target: 30,
-    increment: 10
+    increment: 15
   },
   invite: {
     id: 'daily_invite',
