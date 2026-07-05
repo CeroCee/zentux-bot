@@ -28,13 +28,49 @@ function authorizedChannelIds() {
   );
 }
 
+function configuredCategoryIds() {
+  return new Set(
+    (Array.isArray(config.authorizedVoiceCategories)
+      ? config.authorizedVoiceCategories
+      : [])
+      .map((categoryId) => String(categoryId).trim())
+      .filter(Boolean)
+  );
+}
+
+function isAuthorizedVoiceChannel(channel, scope) {
+  if (!channel?.isVoiceBased()) return false;
+  return scope.channelIds.has(channel.id)
+    || (channel.parentId && scope.categoryIds.has(channel.parentId));
+}
+
+async function createAuthorizedScope(client) {
+  const scope = {
+    channelIds: authorizedChannelIds(),
+    categoryIds: configuredCategoryIds()
+  };
+
+  // Los canales temporales conservan la categoria del canal "JOIN HERE".
+  // Heredamos automaticamente las categorias de los canales configurados para
+  // que TempVoice pueda crear y borrar salas sin editar config.json cada vez.
+  for (const channelId of scope.channelIds) {
+    const channel = client.channels.cache.get(channelId)
+      || await client.channels.fetch(channelId).catch(() => null);
+    if (channel?.isVoiceBased() && channel.parentId) {
+      scope.categoryIds.add(channel.parentId);
+    }
+  }
+
+  return scope;
+}
+
 function trackingKey(voiceState) {
   return `${voiceState.guild.id}:${voiceState.id}`;
 }
 
-function hasActiveVoiceState(voiceState, allowedChannels) {
+function hasActiveVoiceState(voiceState, scope) {
   const channel = voiceState?.channel;
-  if (!channel || !allowedChannels.has(channel.id)) return false;
+  if (!isAuthorizedVoiceChannel(channel, scope)) return false;
   if (channel.id === voiceState.guild.afkChannelId) return false;
   if (voiceState.member?.user?.bot) return false;
 
@@ -45,23 +81,23 @@ function hasActiveVoiceState(voiceState, allowedChannels) {
     && !voiceState.suppress;
 }
 
-function isEligible(voiceState, allowedChannels) {
-  if (!hasActiveVoiceState(voiceState, allowedChannels)) return false;
+function isEligible(voiceState, scope) {
+  if (!hasActiveVoiceState(voiceState, scope)) return false;
 
   const activeHumans = voiceState.channel.members.filter((member) => (
     member.id !== voiceState.id
-    && hasActiveVoiceState(member.voice, allowedChannels)
+    && hasActiveVoiceState(member.voice, scope)
   ));
 
   return activeHumans.size >= 1;
 }
 
-function refreshChannel(channel, allowedChannels, now = Date.now()) {
-  if (!channel?.isVoiceBased() || !allowedChannels.has(channel.id)) return;
+function refreshChannel(channel, scope, now = Date.now()) {
+  if (!isAuthorizedVoiceChannel(channel, scope)) return;
 
   for (const member of channel.members.values()) {
     const key = trackingKey(member.voice);
-    if (isEligible(member.voice, allowedChannels)) {
+    if (isEligible(member.voice, scope)) {
       if (!eligibleSince.has(key)) eligibleSince.set(key, now);
     } else {
       eligibleSince.delete(key);
@@ -69,35 +105,38 @@ function refreshChannel(channel, allowedChannels, now = Date.now()) {
   }
 }
 
-function handleVoiceStateUpdate(oldState, newState, allowedChannels) {
+function handleVoiceStateUpdate(oldState, newState, scope) {
   eligibleSince.delete(trackingKey(oldState));
-  refreshChannel(oldState.channel, allowedChannels);
-  refreshChannel(newState.channel, allowedChannels);
+  refreshChannel(oldState.channel, scope);
+  refreshChannel(newState.channel, scope);
 }
 
-async function fetchAuthorizedChannels(client, allowedChannels) {
-  const channels = [];
-  for (const channelId of allowedChannels) {
-    const channel = client.channels.cache.get(channelId)
-      || await client.channels.fetch(channelId).catch(() => null);
-    if (channel?.isVoiceBased()) channels.push(channel);
+async function fetchAuthorizedChannels(client, scope) {
+  const channels = new Map();
+
+  for (const guild of client.guilds.cache.values()) {
+    const guildChannels = await guild.channels.fetch().catch(() => guild.channels.cache);
+    for (const channel of guildChannels.values()) {
+      if (isAuthorizedVoiceChannel(channel, scope)) channels.set(channel.id, channel);
+    }
   }
-  return channels;
+
+  return [...channels.values()];
 }
 
-async function checkVoiceRewards(client, allowedChannels, now = Date.now()) {
-  const channels = await fetchAuthorizedChannels(client, allowedChannels);
+async function checkVoiceRewards(client, scope, now = Date.now()) {
+  const channels = await fetchAuthorizedChannels(client, scope);
   let rewardedUsers = 0;
 
   for (const channel of channels) {
-    refreshChannel(channel, allowedChannels, now);
+    refreshChannel(channel, scope, now);
 
     for (const member of channel.members.values()) {
       const voiceState = member.voice;
       const key = trackingKey(voiceState);
       const startedAt = eligibleSince.get(key);
 
-      if (!isEligible(voiceState, allowedChannels) || !startedAt) continue;
+      if (!isEligible(voiceState, scope) || !startedAt) continue;
       if (now - startedAt < CHECK_INTERVAL_MS) continue;
 
       try {
@@ -121,29 +160,35 @@ function register(client) {
   if (registeredClients.has(client)) return;
   registeredClients.add(client);
 
-  const allowedChannels = authorizedChannelIds();
+  let scope = {
+    channelIds: authorizedChannelIds(),
+    categoryIds: configuredCategoryIds()
+  };
 
   client.on(Events.VoiceStateUpdate, (oldState, newState) => {
-    handleVoiceStateUpdate(oldState, newState, allowedChannels);
+    handleVoiceStateUpdate(oldState, newState, scope);
   });
 
   client.once(Events.ClientReady, async () => {
-    if (allowedChannels.size === 0) {
-      console.warn('Voice Grind desactivado: authorizedVoiceChannels esta vacio en config.json.');
+    scope = await createAuthorizedScope(client);
+    if (scope.channelIds.size === 0 && scope.categoryIds.size === 0) {
+      console.warn('Voice Grind desactivado: no hay canales ni categorias autorizadas en config.json.');
       return;
     }
 
-    const channels = await fetchAuthorizedChannels(client, allowedChannels);
-    for (const channel of channels) refreshChannel(channel, allowedChannels);
+    const channels = await fetchAuthorizedChannels(client, scope);
+    for (const channel of channels) refreshChannel(channel, scope);
 
     const timer = setInterval(() => {
-      checkVoiceRewards(client, allowedChannels).catch((error) => {
+      checkVoiceRewards(client, scope).catch((error) => {
         console.error('Error verificando Voice Grind:', error);
       });
     }, CHECK_INTERVAL_MS);
     timer.unref();
 
-    console.log(`Voice Grind activo en ${channels.length} canal(es).`);
+    console.log(
+      `Voice Grind activo en ${channels.length} canal(es) de ${scope.categoryIds.size} categoria(s).`
+    );
   });
 }
 
@@ -152,5 +197,7 @@ module.exports = {
   register,
   checkVoiceRewards,
   isEligible,
+  isAuthorizedVoiceChannel,
+  createAuthorizedScope,
   rewardVoiceTransaction
 };
