@@ -72,25 +72,12 @@ function trackingKey(voiceState) {
 function hasActiveVoiceState(voiceState, scope) {
   const channel = voiceState?.channel;
   if (!isAuthorizedVoiceChannel(channel, scope)) return false;
-  if (channel.id === voiceState.guild.afkChannelId) return false;
   if (voiceState.member?.user?.bot) return false;
-
-  return !voiceState.selfMute
-    && !voiceState.serverMute
-    && !voiceState.selfDeaf
-    && !voiceState.serverDeaf
-    && !voiceState.suppress;
+  return true;
 }
 
 function isEligible(voiceState, scope) {
-  if (!hasActiveVoiceState(voiceState, scope)) return false;
-
-  const activeHumans = voiceState.channel.members.filter((member) => (
-    member.id !== voiceState.id
-    && hasActiveVoiceState(member.voice, scope)
-  ));
-
-  return activeHumans.size >= 1;
+  return hasActiveVoiceState(voiceState, scope);
 }
 
 function refreshChannel(channel, scope, now = Date.now()) {
