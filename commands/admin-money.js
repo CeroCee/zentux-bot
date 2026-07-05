@@ -42,7 +42,7 @@ const modifyMoneyTransaction = db.transaction(({
   else if (action === 'remove') next = current - normalizedAmount;
   else next = normalizedAmount;
 
-  if (!Number.isSafeInteger(next) || next < 0) {
+  if (!Number.isFinite(next) || next < 0) {
     throw adminMoneyError('INSUFFICIENT_FUNDS', 'La operación dejaría el saldo en negativo.');
   }
 

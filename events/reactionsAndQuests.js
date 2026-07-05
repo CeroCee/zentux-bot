@@ -26,7 +26,7 @@ const DAILY_QUESTS = Object.freeze({
   voice: {
     id: 'daily_voice',
     target: 30,
-    increment: 15
+    increment: 1
   },
   invite: {
     id: 'daily_invite',
@@ -111,11 +111,16 @@ function ensureDailyQuests(userId, date) {
   }
 }
 
-const checkQuestsTransaction = db.transaction((userId, type) => {
+const checkQuestsTransaction = db.transaction((userId, type, amount) => {
   const normalizedUserId = normalizeUserId(userId);
   const quest = DAILY_QUESTS[type];
   if (!quest) {
     throw new TypeError(`Tipo de mision no valido: ${type}`);
+  }
+
+  const increment = amount === undefined ? quest.increment : Number(amount);
+  if (!Number.isSafeInteger(increment) || increment <= 0) {
+    throw new TypeError('El progreso de la mision debe ser un entero positivo.');
   }
 
   const date = currentDate();
@@ -123,9 +128,9 @@ const checkQuestsTransaction = db.transaction((userId, type) => {
   ensureDailyQuests(normalizedUserId, date);
 
   updateQuestQuery.run(
-    quest.increment,
+    increment,
     quest.target,
-    quest.increment,
+    increment,
     quest.target,
     normalizedUserId,
     quest.id,
@@ -160,8 +165,8 @@ const checkQuestsTransaction = db.transaction((userId, type) => {
   };
 });
 
-function checkQuests(userId, type) {
-  return checkQuestsTransaction(userId, type);
+function checkQuests(userId, type, amount) {
+  return checkQuestsTransaction(userId, type, amount);
 }
 
 const rewardReactionTransaction = db.transaction((userId, messageId) => {

@@ -18,8 +18,8 @@ db.pragma('busy_timeout = 5000');
 db.exec(`
   CREATE TABLE IF NOT EXISTS users (
     userId TEXT PRIMARY KEY,
-    zcoins INTEGER NOT NULL DEFAULT 0,
-    bank INTEGER NOT NULL DEFAULT 0,
+    zcoins REAL NOT NULL DEFAULT 0,
+    bank REAL NOT NULL DEFAULT 0,
     level INTEGER NOT NULL DEFAULT 1,
     xp INTEGER NOT NULL DEFAULT 0,
     total_vc_minutes INTEGER NOT NULL DEFAULT 0,
@@ -41,7 +41,7 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS coin_logs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     userId TEXT NOT NULL,
-    amount INTEGER NOT NULL,
+    amount REAL NOT NULL,
     reason TEXT NOT NULL,
     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
   );
@@ -78,7 +78,7 @@ db.exec(`
 `);
 
 const requiredUserColumns = {
-  bank: 'INTEGER NOT NULL DEFAULT 0',
+  bank: 'REAL NOT NULL DEFAULT 0',
   total_vc_minutes: 'INTEGER NOT NULL DEFAULT 0',
   total_reactions: 'INTEGER NOT NULL DEFAULT 0',
   total_invites: 'INTEGER NOT NULL DEFAULT 0'
@@ -204,6 +204,19 @@ function validateAmount(amount) {
   return normalizedAmount;
 }
 
+function validateCoinAmount(amount) {
+  const normalizedAmount = Number(amount);
+  const amountInCents = normalizedAmount * 100;
+  if (
+    !Number.isFinite(normalizedAmount)
+    || !Number.isSafeInteger(Math.round(amountInCents))
+    || Math.abs(amountInCents - Math.round(amountInCents)) > 1e-9
+  ) {
+    throw new TypeError('amount debe ser una cantidad valida con un maximo de 2 decimales.');
+  }
+  return normalizedAmount;
+}
+
 function getUser(userId) {
   return queries.getUser.get(validateUserId(userId)) || null;
 }
@@ -216,7 +229,7 @@ function getOrCreateUser(userId) {
 
 function registerCoinLog(userId, amount, reason) {
   const normalizedUserId = validateUserId(userId);
-  const normalizedAmount = validateAmount(amount);
+  const normalizedAmount = validateCoinAmount(amount);
   const normalizedReason = String(reason || '').trim();
   if (!normalizedReason) {
     throw new TypeError('reason es obligatorio.');
@@ -238,7 +251,7 @@ function registerCoinLog(userId, amount, reason) {
 
 const addCoinsTransaction = db.transaction((userId, amount, reason) => {
   const normalizedUserId = validateUserId(userId);
-  const normalizedAmount = validateAmount(amount);
+  const normalizedAmount = validateCoinAmount(amount);
   const normalizedReason = String(reason || '').trim();
   if (!normalizedReason) {
     throw new TypeError('reason es obligatorio.');

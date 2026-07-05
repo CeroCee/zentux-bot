@@ -4,6 +4,14 @@ const {
   getLeaderboardPosition
 } = require('../database/db');
 
+function formatVoiceTime(score) {
+  const minutes = Math.max(0, Math.floor(Number(score) || 0));
+  if (minutes < 60) return `${minutes} minuto${minutes === 1 ? '' : 's'}`;
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  return `${hours} h ${remainingMinutes} min`;
+}
+
 const CATEGORIES = Object.freeze({
   wealth: {
     title: '🪙 Riqueza (ZCoins)',
@@ -15,7 +23,7 @@ const CATEGORIES = Object.freeze({
     title: '🎙️ Tiempo en Voz',
     description: 'Tiempo acumulado en canales de voz autorizados.',
     color: 0x5865f2,
-    format: (score) => `${(Number(score) / 60).toFixed(1)} horas`
+    format: formatVoiceTime
   },
   reactions: {
     title: '🎨 Reacciones a Anuncios',
@@ -85,4 +93,4 @@ async function execute(interaction) {
   await interaction.reply({ embeds: [embed] });
 }
 
-module.exports = { data, execute, CATEGORIES, POSITION_BADGES };
+module.exports = { data, execute, CATEGORIES, POSITION_BADGES, formatVoiceTime };
