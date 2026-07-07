@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const {
   ActionRowBuilder,
+  ApplicationCommandPermissionType,
   ButtonBuilder,
   ButtonStyle,
   Client,
@@ -41,6 +42,7 @@ const GUILD_ID = process.env.GUILD_ID;
 const BUYER_ROLE_ID = process.env.BUYER_ROLE_ID;
 const LIMITED_ACCESS_ROLE_ID = process.env.LIMITED_ACCESS_ROLE_ID || '1424919985209217024';
 const CONTENT_CREATOR_ROLE_ID = process.env.CONTENT_CREATOR_ROLE_ID || '1392619993153142834';
+const SIGNED_PLAYER_ROLE_ID = process.env.SIGNED_PLAYER_ROLE_ID || '1524136790594683001';
 const SYNC_MINUTES = Math.max(1, Number.parseInt(process.env.LICENSE_SYNC_MINUTES || '5', 10) || 5);
 const PURCHASE_SYNC_SECONDS = Math.max(15, Number.parseInt(process.env.PURCHASE_SYNC_SECONDS || '30', 10) || 30);
 const EPHEMERAL = MessageFlags.Ephemeral;
@@ -111,13 +113,30 @@ const redeemAttempts = new Map();
 let roleSyncRunning = false;
 let purchaseSyncRunning = false;
 let contentCreatorSyncRunning = false;
+let signedPlayerSyncRunning = false;
 let licenseEventSyncRunning = false;
 const pendingLicenseDeletes = new Map();
 
 async function syncApplicationCommands() {
   const rest = new REST({ version: '10' }).setToken(TOKEN);
   const body = commands.map((command) => command.toJSON());
-  await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body });
+  const registered = await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body });
+  const signedCommand = registered.find((command) => command.name === 'signed-player');
+  if (signedCommand) {
+    try {
+      await rest.put(Routes.applicationCommandPermissions(CLIENT_ID, GUILD_ID, signedCommand.id), {
+        body: {
+          permissions: [
+            { id: GUILD_ID, type: ApplicationCommandPermissionType.Role, permission: false },
+            { id: SIGNED_PLAYER_ROLE_ID, type: ApplicationCommandPermissionType.Role, permission: true }
+          ]
+        }
+      });
+      console.log('Permisos de /signed-player limitados al rol Signed Players.');
+    } catch (error) {
+      console.error('No se pudieron aplicar permisos visibles de /signed-player:', error.message);
+    }
+  }
   console.log(`${body.length} comandos de Discord sincronizados.`);
 }
 
@@ -181,12 +200,14 @@ function paymentMethod(license) {
     shop: 'Zentux Shop',
     custom: 'Licencia personalizada',
     content_creator: 'Beneficio Content Creator',
+    signed_player: 'Beneficio Signed Player',
     paid: 'Compra directa'
   })[license.source] || 'No disponible';
 }
 
 function licenseOrigin(license) {
   if (license.source === 'content_creator') return 'Content Creator';
+  if (license.source === 'signed_player') return 'Signed Player';
   if (license.source === 'shop') return 'Zentux Shop';
   if (license.source === 'giveaway') return 'Regalada';
   if (license.source === 'custom') return 'Personalizada';
@@ -194,7 +215,7 @@ function licenseOrigin(license) {
 }
 
 function formatPayment(license) {
-  if (['giveaway', 'custom', 'content_creator'].includes(license.source)) return 'Gratis';
+  if (['giveaway', 'custom', 'content_creator', 'signed_player'].includes(license.source)) return 'Gratis';
   if (!Number.isFinite(license.paymentAmount)) return 'No disponible';
   if (license.paymentCurrency === 'robux') return `${license.paymentAmount.toLocaleString('en-US')} Robux`;
   if (license.paymentCurrency === 'zcoins') return `${license.paymentAmount.toLocaleString('es-ES')} ZCoins`;
@@ -203,18 +224,22 @@ function formatPayment(license) {
 }
 
 function formatPlan(license) {
-  if (license.source === 'content_creator') return 'Mientras conserve el rol';
+  if (['content_creator', 'signed_player'].includes(license.source)) return 'Mientras conserve el rol';
   if (license.durationHours) return `${license.durationHours} hora(s)`;
   if (!license.durationDays) return 'No disponible';
   return license.durationDays === 365 ? 'Anual (365 dias)' : `${license.durationDays} dia(s)`;
 }
 
 function remainingLabel(license) {
-  return license.source === 'content_creator' ? 'Mientras conserves el rol Content Creator' : formatRemaining(license.paidUntil);
+  if (license.source === 'content_creator') return 'Mientras conserves el rol Content Creator';
+  if (license.source === 'signed_player') return 'Mientras conserves el rol Signed Player';
+  return formatRemaining(license.paidUntil);
 }
 
 function expiryLabel(license) {
-  return license.source === 'content_creator' ? 'Se desactiva al perder el rol Content Creator' : discordDate(license.paidUntil);
+  if (license.source === 'content_creator') return 'Se desactiva al perder el rol Content Creator';
+  if (license.source === 'signed_player') return 'Se desactiva al perder el rol Signed Player';
+  return discordDate(license.paidUntil);
 }
 
 function purchaseFields(license) {
@@ -272,8 +297,8 @@ function licenseErrorMessage(error) {
     not_linked: 'Tu cuenta no tiene una licencia vinculada.',
     unauthorized: 'El bot no esta autorizado por el servidor de licencias.',
     unavailable: 'El servidor de licencias no esta disponible. Intenta nuevamente.',
-    already_claimed: 'Ya reclamaste tu key exclusiva de Content Creator.',
-    restricted_license: 'Esa key de Content Creator pertenece a otra cuenta de Discord.'
+    already_claimed: 'Ya reclamaste tu key exclusiva para este beneficio.',
+    restricted_license: 'Esa key pertenece a otra cuenta de Discord.'
   };
   return messages[error.code] || 'No se pudo procesar la licencia.';
 }
@@ -729,6 +754,32 @@ async function handleGenerate(interaction) {
     return interaction.editReply({ embeds: [embed] });
   }
 
+  if (interaction.commandName === 'signed-player') {
+    if (!member.roles.cache.has(SIGNED_PLAYER_ROLE_ID)) {
+      return interaction.editReply({ content: 'Necesitas el rol **Zentux | Signed Players** para reclamar esta key.' });
+    }
+
+    const data = await licenseApi.createSignedPlayer({
+      guildId: interaction.guildId,
+      discordUserId: interaction.user.id,
+      discordUsername: member.displayName || interaction.user.username
+    });
+    if (!member.roles.cache.has(BUYER_ROLE_ID)) {
+      await member.roles.add(BUYER_ROLE_ID, 'Beneficio de Zentux Signed Player');
+    }
+    const embed = brandEmbed({
+      color: COLORS.success,
+      title: data.reactivated ? 'âœ… Beneficio Signed Player reactivado' : 'âœ… Key de Signed Player creada',
+      description: [
+        `Tu key exclusiva es:\n\`${data.license.licenseKey}\``,
+        '',
+        '**Vigencia:** mientras conserves el rol Zentux | Signed Players.',
+        'Solo tu cuenta de Discord puede vincular esta licencia.'
+      ].join('\n')
+    });
+    return interaction.editReply({ embeds: [embed] });
+  }
+
   if (!member.roles.cache.has(CONTENT_CREATOR_ROLE_ID)) {
     return interaction.editReply({ content: 'Necesitas el rol **Zentux | Content Creator** para reclamar esta key.' });
   }
@@ -781,6 +832,36 @@ async function syncContentCreatorLicenses() {
     console.error('No se pudieron sincronizar los Content Creators:', error.code || error.message);
   } finally {
     contentCreatorSyncRunning = false;
+  }
+}
+
+async function syncSignedPlayerLicenses() {
+  if (signedPlayerSyncRunning) return;
+  signedPlayerSyncRunning = true;
+  try {
+    const guild = client.guilds.cache.get(GUILD_ID) || await client.guilds.fetch(GUILD_ID);
+    const data = await licenseApi.signedPlayers(GUILD_ID);
+    let deactivated = 0;
+
+    for (const player of data.players || []) {
+      const member = await guild.members.fetch(player.discordUserId).catch(() => null);
+      if (member?.roles.cache.has(SIGNED_PLAYER_ROLE_ID)) continue;
+
+      await licenseApi.deactivateSignedPlayer(GUILD_ID, player.discordUserId);
+      deactivated += 1;
+      if (member?.roles.cache.has(BUYER_ROLE_ID)) {
+        const fallback = await licenseApi.info(player.discordUserId).catch(() => null);
+        if (!fallback?.license?.active) {
+          await member.roles.remove(BUYER_ROLE_ID, 'Perdio el rol Zentux Signed Player').catch(() => null);
+        }
+      }
+    }
+
+    if (deactivated > 0) console.log(`Licencias Signed Player desactivadas: ${deactivated}.`);
+  } catch (error) {
+    console.error('No se pudieron sincronizar los Signed Players:', error.code || error.message);
+  } finally {
+    signedPlayerSyncRunning = false;
   }
 }
 
@@ -1012,10 +1093,12 @@ client.once(Events.ClientReady, async (readyClient) => {
   await syncPurchaseLogs();
   await syncLicenseEventLogs();
   await syncContentCreatorLicenses();
+  await syncSignedPlayerLicenses();
   setInterval(syncBuyerRoles, SYNC_MINUTES * 60 * 1000).unref();
   setInterval(syncPurchaseLogs, PURCHASE_SYNC_SECONDS * 1000).unref();
   setInterval(syncLicenseEventLogs, PURCHASE_SYNC_SECONDS * 1000).unref();
   setInterval(syncContentCreatorLicenses, SYNC_MINUTES * 60 * 1000).unref();
+  setInterval(syncSignedPlayerLicenses, SYNC_MINUTES * 60 * 1000).unref();
 });
 
 client.on(Events.InteractionCreate, async (interaction) => {
@@ -1037,6 +1120,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       if (interaction.commandName === 'liberar-admin') return await handleReleaseCommand(interaction);
       if (interaction.commandName === 'liberar-access') return await handleReleaseCommand(interaction);
       if (interaction.commandName === 'generar') return await handleGenerate(interaction);
+      if (interaction.commandName === 'signed-player') return await handleGenerate(interaction);
       if (interaction.commandName === 'generar-giveaway') return await handleGenerate(interaction);
       if (interaction.commandName === 'logs') return await handleLogs(interaction);
       if (interaction.commandName === 'borrar') return await handleDeleteCommand(interaction);

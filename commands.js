@@ -151,6 +151,15 @@ const commands = [
         .setDescription('Reclama tu key exclusiva de Zentux Content Creator')
     ),
   new SlashCommandBuilder()
+    .setName('signed-player')
+    .setDescription('Reclama el beneficio exclusivo de Zentux Signed Players')
+    .setDMPermission(false)
+    .addSubcommand((subcommand) =>
+      subcommand
+        .setName('key')
+        .setDescription('Reclama tu key exclusiva de Zentux Signed Player')
+    ),
+  new SlashCommandBuilder()
     .setName('generar-giveaway')
     .setDescription('Genera licencias temporales para giveaways')
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
