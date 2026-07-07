@@ -41,6 +41,7 @@ if (missingEnvironment.length > 0) {
 const GUILD_ID = process.env.GUILD_ID;
 const BUYER_ROLE_ID = process.env.BUYER_ROLE_ID;
 const LIMITED_ACCESS_ROLE_ID = process.env.LIMITED_ACCESS_ROLE_ID || '1424919985209217024';
+const GIVEAWAY_ACCESS_ROLE_ID = process.env.GIVEAWAY_ACCESS_ROLE_ID || '1523246114059587594';
 const CONTENT_CREATOR_ROLE_ID = process.env.CONTENT_CREATOR_ROLE_ID || '1392619993153142834';
 const SIGNED_PLAYER_ROLE_ID = process.env.SIGNED_PLAYER_ROLE_ID || '1524136790594683001';
 const SYNC_MINUTES = Math.max(1, Number.parseInt(process.env.LICENSE_SYNC_MINUTES || '5', 10) || 5);
@@ -281,10 +282,25 @@ async function getLimitedAccessRole(guild) {
   return role;
 }
 
+async function getGiveawayAccessRole(guild) {
+  const role = guild.roles.cache.get(GIVEAWAY_ACCESS_ROLE_ID)
+    || await guild.roles.fetch(GIVEAWAY_ACCESS_ROLE_ID);
+  if (!role) throw new Error('No se encontro GIVEAWAY_ACCESS_ROLE_ID en el servidor.');
+  const botMember = guild.members.me || await guild.members.fetchMe();
+  if (!botMember.permissions.has(PermissionFlagsBits.ManageRoles)) {
+    throw new Error('El bot no tiene el permiso Manage Roles.');
+  }
+  if (botMember.roles.highest.comparePositionTo(role) <= 0) {
+    throw new Error('El rol del bot debe estar por encima del rol de Giveaway Access.');
+  }
+  return role;
+}
+
 function hasLicenseAccessRole(member) {
   return Boolean(
     member?.roles.cache.has(BUYER_ROLE_ID)
     || member?.roles.cache.has(LIMITED_ACCESS_ROLE_ID)
+    || member?.roles.cache.has(GIVEAWAY_ACCESS_ROLE_ID)
   );
 }
 
@@ -339,6 +355,11 @@ async function handleRedeem(interaction) {
       grantedRole = await getLimitedAccessRole(interaction.guild);
       if (!member.roles.cache.has(grantedRole.id)) {
         await member.roles.add(grantedRole, 'Licencia de Zentux Shop activa');
+      }
+    } else if (license.source === 'giveaway') {
+      grantedRole = await getGiveawayAccessRole(interaction.guild);
+      if (!member.roles.cache.has(grantedRole.id)) {
+        await member.roles.add(grantedRole, 'Key de giveaway Zentux canjeada');
       }
     } else {
       const { role } = await getGuildAndRole();
@@ -420,10 +441,11 @@ async function handleInfo(interaction) {
     const data = await licenseApi.info(targetUser.id);
     const license = data.license;
     if (!license.active) {
-      const expiredRoleId = license.source === 'shop'
-        || license.licenseKey?.startsWith('ZENTUX-SHOP-')
+      const expiredRoleId = license.source === 'shop' || license.licenseKey?.startsWith('ZENTUX-SHOP-')
         ? LIMITED_ACCESS_ROLE_ID
-        : BUYER_ROLE_ID;
+        : license.source === 'giveaway' || license.licenseKey?.startsWith('ZENTUX-GIFT-')
+          ? GIVEAWAY_ACCESS_ROLE_ID
+          : BUYER_ROLE_ID;
       await targetMember.roles.remove(expiredRoleId, 'Licencia Zentux inactiva o vencida').catch(() => null);
     }
 
@@ -1045,6 +1067,7 @@ async function syncBuyerRoles() {
       licenseApi.members()
     ]);
     const limitedRole = await getLimitedAccessRole(guild);
+    const giveawayRole = await getGiveawayAccessRole(guild);
 
     let added = 0;
     let removed = 0;
@@ -1052,11 +1075,13 @@ async function syncBuyerRoles() {
       const member = await guild.members.fetch(record.discordUserId).catch(() => null);
       if (!member) continue;
 
-      const isShopLicense = record.source === 'shop';
-      const expectedRole = isShopLicense ? limitedRole : role;
-      const otherRole = isShopLicense ? role : limitedRole;
+      const expectedRole = record.source === 'shop'
+        ? limitedRole
+        : record.source === 'giveaway'
+          ? giveawayRole
+          : role;
+      const otherRoles = [role, limitedRole, giveawayRole].filter((candidate) => candidate.id !== expectedRole.id);
       const hasExpectedRole = member.roles.cache.has(expectedRole.id);
-      const hasOtherRole = member.roles.cache.has(otherRole.id);
 
       if (record.active && !hasExpectedRole) {
         await member.roles.add(expectedRole, 'Sincronizacion de licencia Zentux activa');
@@ -1066,9 +1091,11 @@ async function syncBuyerRoles() {
         removed += 1;
       }
 
-      if (hasOtherRole) {
-        await member.roles.remove(otherRole, 'Ajuste del tipo de acceso de la licencia Zentux');
-        removed += 1;
+      for (const otherRole of otherRoles) {
+        if (member.roles.cache.has(otherRole.id)) {
+          await member.roles.remove(otherRole, 'Ajuste del tipo de acceso de la licencia Zentux');
+          removed += 1;
+        }
       }
     }
     console.log(`Sincronizacion de roles: ${added} agregados, ${removed} retirados.`);
