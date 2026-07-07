@@ -61,6 +61,19 @@ db.exec(`
     timestamp DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
 
+  CREATE TABLE IF NOT EXISTS bot_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS voice_daily_awards (
+    date TEXT PRIMARY KEY,
+    userId TEXT,
+    minutes INTEGER NOT NULL DEFAULT 0,
+    awarded_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+
   CREATE INDEX IF NOT EXISTS idx_quests_user_date
   ON quests (userId, date);
 
@@ -172,6 +185,34 @@ const queries = {
   registerXpLog: db.prepare(`
     INSERT INTO xp_logs (userId, amount, reason)
     VALUES (?, ?, ?)
+  `),
+
+  getSetting: db.prepare(`
+    SELECT value
+    FROM bot_settings
+    WHERE key = ?
+  `),
+
+  setSetting: db.prepare(`
+    INSERT INTO bot_settings (key, value, updated_at)
+    VALUES (?, ?, CURRENT_TIMESTAMP)
+    ON CONFLICT(key) DO UPDATE SET
+      value = excluded.value,
+      updated_at = CURRENT_TIMESTAMP
+  `),
+
+  resetVoiceMinutes: db.prepare(`
+    UPDATE users
+    SET total_vc_minutes = 0
+  `),
+
+  recordVoiceDailyAward: db.prepare(`
+    INSERT INTO voice_daily_awards (date, userId, minutes)
+    VALUES (?, ?, ?)
+    ON CONFLICT(date) DO UPDATE SET
+      userId = excluded.userId,
+      minutes = excluded.minutes,
+      awarded_at = CURRENT_TIMESTAMP
   `),
 
   registerCoinLog: db.prepare(`
@@ -410,6 +451,35 @@ function getTopVoice(limit = 10) { return getLeaderboard('voice', limit); }
 function getTopReactions(limit = 10) { return getLeaderboard('reactions', limit); }
 function getTopInvites(limit = 10) { return getLeaderboard('invites', limit); }
 
+function getSetting(key) {
+  const normalizedKey = String(key || '').trim();
+  if (!normalizedKey) throw new TypeError('key es obligatorio.');
+  return queries.getSetting.get(normalizedKey)?.value ?? null;
+}
+
+function setSetting(key, value) {
+  const normalizedKey = String(key || '').trim();
+  if (!normalizedKey) throw new TypeError('key es obligatorio.');
+  const normalizedValue = String(value ?? '');
+  queries.setSetting.run(normalizedKey, normalizedValue);
+  return normalizedValue;
+}
+
+function resetVoiceMinutes() {
+  return queries.resetVoiceMinutes.run().changes;
+}
+
+function recordVoiceDailyAward(date, userId, minutes) {
+  const normalizedDate = String(date || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(normalizedDate)) {
+    throw new TypeError('date debe tener formato YYYY-MM-DD.');
+  }
+  const normalizedUserId = userId ? validateUserId(userId) : null;
+  const normalizedMinutes = Number.parseInt(minutes, 10) || 0;
+  queries.recordVoiceDailyAward.run(normalizedDate, normalizedUserId, normalizedMinutes);
+  return { date: normalizedDate, userId: normalizedUserId, minutes: normalizedMinutes };
+}
+
 function xpForNextLevel(level) {
   const normalizedLevel = Math.max(1, Number.parseInt(level, 10) || 1);
   return normalizedLevel * 100;
@@ -483,6 +553,10 @@ module.exports = {
   incrementVoiceMinutes,
   incrementReactions,
   incrementInvites,
+  getSetting,
+  setSetting,
+  resetVoiceMinutes,
+  recordVoiceDailyAward,
   getLeaderboard,
   getLeaderboardPosition,
   getTopWealth,

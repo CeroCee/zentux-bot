@@ -1,9 +1,14 @@
-const { Events } = require('discord.js');
+const { EmbedBuilder, Events } = require('discord.js');
 const {
   db,
   addXp,
+  getSetting,
   getOrCreateUser,
-  incrementVoiceMinutes
+  getTopVoice,
+  incrementVoiceMinutes,
+  recordVoiceDailyAward,
+  resetVoiceMinutes,
+  setSetting
 } = require('../database/db');
 const { checkQuests } = require('./reactionsAndQuests');
 
@@ -11,6 +16,12 @@ const ONE_MINUTE_MS = 60 * 1000;
 const CHECK_INTERVAL_MS = ONE_MINUTE_MS;
 const COINS_PER_MINUTE = 0.5;
 const XP_INTERVAL_MINUTES = 5;
+const VOICE_DAILY_REWARD = 1000;
+const VOICE_DAILY_TIMEZONE = process.env.VOICE_DAILY_TIMEZONE || 'America/New_York';
+const VOICE_DAILY_ANNOUNCEMENT_CHANNEL_ID = process.env.VOICE_DAILY_ANNOUNCEMENT_CHANNEL_ID
+  || '1522460537571643532';
+const VOICE_DAILY_DATE_SETTING = 'voice_daily_date';
+const VOICE_DAILY_RESET_VERSION_SETTING = 'voice_daily_reset_2026_07_07_v1';
 
 const eligibleSince = new Map();
 const registeredClients = new WeakSet();
@@ -64,6 +75,115 @@ async function rewardVoiceTransaction(userId, minutes, licenseApi, referenceId) 
   }
 
   return result;
+}
+
+function getVoiceDayKey(now = new Date()) {
+  try {
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone: VOICE_DAILY_TIMEZONE,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    }).format(now);
+  } catch {
+    return now.toISOString().slice(0, 10);
+  }
+}
+
+function formatVoiceDuration(minutes) {
+  const totalMinutes = Math.max(0, Math.floor(Number(minutes) || 0));
+  const hours = Math.floor(totalMinutes / 60);
+  const remainingMinutes = totalMinutes % 60;
+  if (hours <= 0) return `${remainingMinutes} minuto${remainingMinutes === 1 ? '' : 's'}`;
+  return `${hours} hora${hours === 1 ? '' : 's'} y ${remainingMinutes} minuto${remainingMinutes === 1 ? '' : 's'}`;
+}
+
+async function announceDailyVoiceWinner(client, winnerId, minutes, date) {
+  const channel = await client.channels.fetch(VOICE_DAILY_ANNOUNCEMENT_CHANNEL_ID).catch(() => null);
+  if (!channel?.isTextBased?.()) {
+    console.warn(
+      `No se pudo anunciar el ganador diario de voz: canal ${VOICE_DAILY_ANNOUNCEMENT_CHANNEL_ID} no disponible.`
+    );
+    return false;
+  }
+
+  const embed = new EmbedBuilder()
+    .setColor(0xf5b800)
+    .setTitle('🏆 Ganador diario de voz')
+    .setDescription([
+      `Felicidades <@${winnerId}>.`,
+      '',
+      `Fue la persona con más tiempo en voz durante el día **${date}**.`,
+      `Tiempo registrado: **${formatVoiceDuration(minutes)}**.`,
+      `Recompensa entregada: **${VOICE_DAILY_REWARD.toLocaleString('es-ES')} Z-Coins**.`
+    ].join('\n'))
+    .setFooter({ text: 'Zentux Voice Leaderboard • el contador diario fue reiniciado' })
+    .setTimestamp();
+
+  await channel.send({
+    content: `🏆 <@${winnerId}> ganó el premio diario de voz.`,
+    embeds: [embed]
+  });
+  return true;
+}
+
+async function awardAndResetDailyVoiceLeaderboard(client, licenseApi, now = new Date()) {
+  const currentDate = getVoiceDayKey(now);
+  const previousDate = getSetting(VOICE_DAILY_DATE_SETTING);
+
+  if (!previousDate) {
+    setSetting(VOICE_DAILY_DATE_SETTING, currentDate);
+    return { changed: false, initialized: true };
+  }
+
+  if (previousDate === currentDate) {
+    return { changed: false };
+  }
+
+  const winner = getTopVoice(1)[0];
+  const winnerMinutes = Math.floor(Number(winner?.score) || 0);
+
+  if (winner?.userId && winnerMinutes > 0) {
+    await licenseApi.economyAdd({
+      discordUserId: winner.userId,
+      amount: VOICE_DAILY_REWARD,
+      currency: 'zcoins',
+      bucket: 'pocket',
+      reason: `Premio diario de voz (${previousDate})`,
+      referenceId: `voice-daily-winner:${previousDate}`
+    });
+    recordVoiceDailyAward(previousDate, winner.userId, winnerMinutes);
+    await announceDailyVoiceWinner(client, winner.userId, winnerMinutes, previousDate);
+    console.log(
+      `Ganador diario de voz ${previousDate}: ${winner.userId}, ${winnerMinutes} minuto(s), +${VOICE_DAILY_REWARD} ZCoins.`
+    );
+  } else {
+    recordVoiceDailyAward(previousDate, null, 0);
+    console.log(`Leaderboard diario de voz ${previousDate}: sin ganador registrado.`);
+  }
+
+  const resetUsers = resetVoiceMinutes();
+  setSetting(VOICE_DAILY_DATE_SETTING, currentDate);
+  console.log(`Leaderboard diario de voz reiniciado para ${currentDate}; ${resetUsers} usuario(s) limpiados.`);
+  return { changed: true, date: currentDate, previousDate };
+}
+
+function initializeDailyVoiceLeaderboard(now = new Date()) {
+  const currentDate = getVoiceDayKey(now);
+  if (getSetting(VOICE_DAILY_RESET_VERSION_SETTING) !== '1') {
+    const resetUsers = resetVoiceMinutes();
+    setSetting(VOICE_DAILY_DATE_SETTING, currentDate);
+    setSetting(VOICE_DAILY_RESET_VERSION_SETTING, '1');
+    console.log(
+      `Leaderboard de voz cambiado a diario y reiniciado para ${currentDate}; ${resetUsers} usuario(s) limpiados.`
+    );
+    return { reset: true, resetUsers, currentDate };
+  }
+
+  if (!getSetting(VOICE_DAILY_DATE_SETTING)) {
+    setSetting(VOICE_DAILY_DATE_SETTING, currentDate);
+  }
+  return { reset: false, currentDate };
 }
 
 // Voice Grind es global: cualquier canal de voz o escenario del servidor cuenta.
@@ -177,6 +297,8 @@ async function fetchAuthorizedChannels(client) {
 }
 
 async function checkVoiceRewards(client, scope, now = Date.now()) {
+  await awardAndResetDailyVoiceLeaderboard(client, client.licenseApi, new Date(now));
+
   const activeStates = getActiveVoiceStates(client);
   const activeKeys = new Set(activeStates.keys());
   let rewardedUsers = 0;
@@ -224,6 +346,7 @@ function register(client) {
 
   client.once(Events.ClientReady, async () => {
     await createAuthorizedScope(client);
+    initializeDailyVoiceLeaderboard();
     const channels = await fetchAuthorizedChannels(client);
     const seededUsers = seedActiveVoiceSessions(client);
 
@@ -253,6 +376,10 @@ module.exports = {
   isAuthorizedVoiceChannel,
   createAuthorizedScope,
   rewardVoiceTransaction,
+  awardAndResetDailyVoiceLeaderboard,
+  initializeDailyVoiceLeaderboard,
+  getVoiceDayKey,
+  formatVoiceDuration,
   seedActiveVoiceSessions,
   getActiveVoiceStates
 };

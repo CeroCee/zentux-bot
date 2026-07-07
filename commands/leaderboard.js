@@ -21,7 +21,7 @@ const CATEGORIES = Object.freeze({
   },
   voice: {
     title: '🎙️ Tiempo en Voz',
-    description: 'Tiempo acumulado en canales de voz autorizados.',
+    description: 'Tiempo diario acumulado en canales de voz. Se reinicia cada 24 horas.',
     color: 0x5865f2,
     format: formatVoiceTime
   },
