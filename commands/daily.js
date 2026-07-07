@@ -1,6 +1,7 @@
 const { EmbedBuilder, MessageFlags, SlashCommandBuilder } = require('discord.js');
 const { db, queries, addXp } = require('../database/db');
 const { setCooldown, getCooldown } = require('../utils/cooldownManager');
+const { applyZCoinMultiplier } = require('../utils/zcoinMultiplier');
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const STREAK_BREAK_MS = 48 * 60 * 60 * 1000;
@@ -98,12 +99,19 @@ async function execute(interaction, { licenseApi } = {}) {
     return;
   }
 
+  const reward = await applyZCoinMultiplier({
+    guild: interaction.guild,
+    userId: interaction.user.id,
+    amount: result.reward,
+    reason: `Recompensa diaria: dia ${result.rewardDay}`
+  });
+
   const wallet = await licenseApi.economyAdd({
     discordUserId: interaction.user.id,
-    amount: result.reward,
+    amount: reward.amount,
     currency: 'zcoins',
     bucket: 'pocket',
-    reason: `Recompensa diaria: dia ${result.rewardDay}`,
+    reason: reward.reason,
     referenceId: `daily:${interaction.user.id}:${new Date().toISOString().slice(0, 10)}`
   });
 
@@ -129,6 +137,10 @@ async function execute(interaction, { licenseApi } = {}) {
     )
     .setFooter({ text: `Recompensa de la escala: día ${result.rewardDay}` })
     .setTimestamp();
+
+  embed.setDescription(
+    `Recibiste **${reward.amount} ZCoins**${reward.multiplier > 1 ? ` (**x2**, +${reward.bonus} bonus)` : ''} y **${result.xpEarned} XP**.${protectionText}`
+  );
 
   await interaction.reply({ embeds: [embed] });
 }

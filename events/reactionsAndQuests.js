@@ -6,6 +6,7 @@ const {
   getOrCreateUser,
   incrementReactions
 } = require('../database/db');
+const { applyZCoinMultiplier } = require('../utils/zcoinMultiplier');
 
 const REACTION_REWARD = 10;
 const MAX_DAILY_REACTION_REWARD = 100;
@@ -198,27 +199,42 @@ const prepareReactionReward = db.transaction((userId, messageId) => {
   };
 });
 
-async function rewardReactionTransaction(userId, messageId, licenseApi) {
+async function rewardReactionTransaction(userId, messageId, licenseApi, guild) {
   const result = prepareReactionReward(userId, messageId);
   if (!result.rewarded) return result;
+  const reward = await applyZCoinMultiplier({
+    guild,
+    userId,
+    amount: REACTION_REWARD,
+    reason: REACTION_REASON
+  });
   await licenseApi.economyAdd({
     discordUserId: userId,
-    amount: REACTION_REWARD,
+    amount: reward.amount,
     currency: 'zcoins',
     bucket: 'pocket',
-    reason: REACTION_REASON,
+    reason: reward.reason,
     referenceId: `reaction:${userId}:${messageId}`
   });
   if (result.quest?.comboAwarded) {
+    const comboReward = await applyZCoinMultiplier({
+      guild,
+      userId,
+      amount: COMBO_REWARD,
+      reason: COMBO_REASON
+    });
     await licenseApi.economyAdd({
       discordUserId: userId,
-      amount: COMBO_REWARD,
+      amount: comboReward.amount,
       currency: 'zcoins',
       bucket: 'pocket',
-      reason: COMBO_REASON,
+      reason: comboReward.reason,
       referenceId: `combo:${userId}:${result.quest.date}`
     });
   }
+  result.coins = reward.amount;
+  result.multiplier = reward.multiplier;
+  result.bonus = reward.bonus;
   return result;
 }
 
@@ -258,7 +274,7 @@ async function handleReaction(reaction, user, announcementChannelId, rewardsStar
   if (reaction.message.channelId !== announcementChannelId) return;
   if (!isMessageEligible(reaction.message, rewardsStartAt)) return;
 
-  const result = await rewardReactionTransaction(user.id, reaction.message.id, licenseApi);
+  const result = await rewardReactionTransaction(user.id, reaction.message.id, licenseApi, reaction.message.guild);
   if (result.quest?.comboAwarded) {
     console.log(`Combo diario otorgado a ${user.id}: +${COMBO_REWARD} ZCoins.`);
   }

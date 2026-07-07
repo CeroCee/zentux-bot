@@ -11,6 +11,7 @@ const {
   setSetting
 } = require('../database/db');
 const { checkQuests } = require('./reactionsAndQuests');
+const { applyZCoinMultiplier } = require('../utils/zcoinMultiplier');
 
 const ONE_MINUTE_MS = 60 * 1000;
 const CHECK_INTERVAL_MS = ONE_MINUTE_MS;
@@ -52,28 +53,43 @@ const prepareVoiceReward = db.transaction((userId, minutes = 1) => {
   };
 });
 
-async function rewardVoiceTransaction(userId, minutes, licenseApi, referenceId) {
+async function rewardVoiceTransaction(userId, minutes, licenseApi, referenceId, guild) {
   const result = prepareVoiceReward(userId, minutes);
+  const reward = await applyZCoinMultiplier({
+    guild,
+    userId,
+    amount: result.coins,
+    reason: `Voice Grind: ${result.minutes} minuto(s) en voz`
+  });
   await licenseApi.economyAdd({
     discordUserId: userId,
-    amount: result.coins,
+    amount: reward.amount,
     currency: 'zcoins',
     bucket: 'pocket',
-    reason: `Voice Grind: ${result.minutes} minuto(s) en voz`,
+    reason: reward.reason,
     referenceId
   });
 
   if (result.quest?.comboAwarded) {
+    const comboReward = await applyZCoinMultiplier({
+      guild,
+      userId,
+      amount: 100,
+      reason: 'Combo diario: 3 misiones completadas'
+    });
     await licenseApi.economyAdd({
       discordUserId: userId,
-      amount: 100,
+      amount: comboReward.amount,
       currency: 'zcoins',
       bucket: 'pocket',
-      reason: 'Combo diario: 3 misiones completadas',
+      reason: comboReward.reason,
       referenceId: `combo:${userId}:${result.quest.date}`
     });
   }
 
+  result.coins = reward.amount;
+  result.multiplier = reward.multiplier;
+  result.bonus = reward.bonus;
   return result;
 }
 
@@ -144,12 +160,18 @@ async function awardAndResetDailyVoiceLeaderboard(client, licenseApi, now = new 
   const winnerMinutes = Math.floor(Number(winner?.score) || 0);
 
   if (winner?.userId && winnerMinutes > 0) {
+    const reward = await applyZCoinMultiplier({
+      guild: client.guilds.cache.first(),
+      userId: winner.userId,
+      amount: VOICE_DAILY_REWARD,
+      reason: `Premio diario de voz (${previousDate})`
+    });
     await licenseApi.economyAdd({
       discordUserId: winner.userId,
-      amount: VOICE_DAILY_REWARD,
+      amount: reward.amount,
       currency: 'zcoins',
       bucket: 'pocket',
-      reason: `Premio diario de voz (${previousDate})`,
+      reason: reward.reason,
       referenceId: `voice-daily-winner:${previousDate}`
     });
     recordVoiceDailyAward(previousDate, winner.userId, winnerMinutes);
@@ -258,7 +280,8 @@ async function creditElapsedVoiceTime(voiceState, licenseApi, now = Date.now()) 
     voiceState.id,
     completedMinutes,
     licenseApi,
-    `voice:${voiceState.guild.id}:${voiceState.id}:${startedAt}:${completedMinutes}`
+    `voice:${voiceState.guild.id}:${voiceState.id}:${startedAt}:${completedMinutes}`,
+    voiceState.guild
   );
   eligibleSince.set(key, startedAt + (completedMinutes * ONE_MINUTE_MS));
   return result;
