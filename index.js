@@ -764,9 +764,6 @@ async function handleGenerate(interaction) {
       discordUserId: interaction.user.id,
       discordUsername: member.displayName || interaction.user.username
     });
-    if (!member.roles.cache.has(BUYER_ROLE_ID)) {
-      await member.roles.add(BUYER_ROLE_ID, 'Beneficio de Zentux Signed Player');
-    }
     const embed = brandEmbed({
       color: COLORS.success,
       title: data.reactivated ? 'âœ… Beneficio Signed Player reactivado' : 'âœ… Key de Signed Player creada',
@@ -789,9 +786,6 @@ async function handleGenerate(interaction) {
     discordUserId: interaction.user.id,
     discordUsername: interaction.user.username
   });
-  if (!member.roles.cache.has(BUYER_ROLE_ID)) {
-    await member.roles.add(BUYER_ROLE_ID, 'Beneficio de Zentux Content Creator');
-  }
   const embed = brandEmbed({
     color: COLORS.success,
     title: data.reactivated ? '✅ Beneficio reactivado' : '✅ Key de Content Creator creada',
@@ -812,10 +806,17 @@ async function syncContentCreatorLicenses() {
     const guild = client.guilds.cache.get(GUILD_ID) || await client.guilds.fetch(GUILD_ID);
     const data = await licenseApi.contentCreators(GUILD_ID);
     let deactivated = 0;
+    let buyerRolesRemoved = 0;
 
     for (const creator of data.creators || []) {
       const member = await guild.members.fetch(creator.discordUserId).catch(() => null);
-      if (member?.roles.cache.has(CONTENT_CREATOR_ROLE_ID)) continue;
+      if (member?.roles.cache.has(CONTENT_CREATOR_ROLE_ID)) {
+        if (member.roles.cache.has(BUYER_ROLE_ID)) {
+          await member.roles.remove(BUYER_ROLE_ID, 'Content Creator usa su propio rol, no Buyer').catch(() => null);
+          buyerRolesRemoved += 1;
+        }
+        continue;
+      }
 
       await licenseApi.deactivateContentCreator(GUILD_ID, creator.discordUserId);
       deactivated += 1;
@@ -828,6 +829,7 @@ async function syncContentCreatorLicenses() {
     }
 
     if (deactivated > 0) console.log(`Licencias Content Creator desactivadas: ${deactivated}.`);
+    if (buyerRolesRemoved > 0) console.log(`Roles Buyer retirados de Content Creators: ${buyerRolesRemoved}.`);
   } catch (error) {
     console.error('No se pudieron sincronizar los Content Creators:', error.code || error.message);
   } finally {
@@ -842,10 +844,17 @@ async function syncSignedPlayerLicenses() {
     const guild = client.guilds.cache.get(GUILD_ID) || await client.guilds.fetch(GUILD_ID);
     const data = await licenseApi.signedPlayers(GUILD_ID);
     let deactivated = 0;
+    let buyerRolesRemoved = 0;
 
     for (const player of data.players || []) {
       const member = await guild.members.fetch(player.discordUserId).catch(() => null);
-      if (member?.roles.cache.has(SIGNED_PLAYER_ROLE_ID)) continue;
+      if (member?.roles.cache.has(SIGNED_PLAYER_ROLE_ID)) {
+        if (member.roles.cache.has(BUYER_ROLE_ID)) {
+          await member.roles.remove(BUYER_ROLE_ID, 'Signed Player usa su propio rol, no Buyer').catch(() => null);
+          buyerRolesRemoved += 1;
+        }
+        continue;
+      }
 
       await licenseApi.deactivateSignedPlayer(GUILD_ID, player.discordUserId);
       deactivated += 1;
@@ -858,6 +867,7 @@ async function syncSignedPlayerLicenses() {
     }
 
     if (deactivated > 0) console.log(`Licencias Signed Player desactivadas: ${deactivated}.`);
+    if (buyerRolesRemoved > 0) console.log(`Roles Buyer retirados de Signed Players: ${buyerRolesRemoved}.`);
   } catch (error) {
     console.error('No se pudieron sincronizar los Signed Players:', error.code || error.message);
   } finally {
