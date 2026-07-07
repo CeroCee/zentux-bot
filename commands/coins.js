@@ -12,6 +12,12 @@ const data = new SlashCommandBuilder()
   );
 
 async function execute(interaction, { licenseApi } = {}) {
+  await interaction.deferReply();
+
+  if (!licenseApi) {
+    throw new Error('El servicio de economia no esta configurado.');
+  }
+
   const target = interaction.options.getUser('usuario') || interaction.user;
   const localUser = getOrCreateUser(target.id);
   const response = await licenseApi.economyUser({
@@ -47,7 +53,7 @@ async function execute(interaction, { licenseApi } = {}) {
     .setFooter({ text: 'Zentux Economy' })
     .setTimestamp();
 
-  await interaction.reply({ embeds: [embed] });
+  await interaction.editReply({ embeds: [embed] });
 }
 
 module.exports = { data, execute };
