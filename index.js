@@ -63,6 +63,16 @@ const licenseApi = createLicenseApi({
   secret: process.env.DISCORD_LICENSE_SECRET
 });
 
+function secretFingerprint(value) {
+  const normalized = String(value || '');
+  if (!normalized) return 'empty';
+  return `${normalized.length}:${crypto.createHash('sha256').update(normalized).digest('hex').slice(0, 10)}`;
+}
+
+console.log(
+  `License API config: url=${process.env.LICENSE_API_URL}, secret=${secretFingerprint(process.env.DISCORD_LICENSE_SECRET)}`
+);
+
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
