@@ -6,6 +6,7 @@ const economyCommandModules = [
   require('./commands/transfer'),
   require('./commands/bank'),
   require('./commands/rob'),
+  require('./commands/bet'),
   require('./commands/leaderboard'),
   require('./commands/admin-money'),
   require('./commands/admin-cooldown'),

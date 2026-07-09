@@ -1139,6 +1139,16 @@ async function syncBuyerRoles() {
   }
 }
 
+async function expirePendingBets() {
+  try {
+    const result = await licenseApi.economyBetExpire();
+    const count = result.expired?.length || 0;
+    if (count > 0) console.log(`Apuestas expiradas y reembolsadas: ${count}.`);
+  } catch (error) {
+    console.error('No se pudieron expirar apuestas pendientes:', error.code || error.message);
+  }
+}
+
 client.once(Events.ClientReady, async (readyClient) => {
   try {
     const migration = await licenseApi.economyMigrate(database.listUsersForMigration());
@@ -1164,11 +1174,13 @@ client.once(Events.ClientReady, async (readyClient) => {
   await syncLicenseEventLogs();
   await syncContentCreatorLicenses();
   await syncSignedPlayerLicenses();
+  await expirePendingBets();
   setInterval(syncBuyerRoles, SYNC_MINUTES * 60 * 1000).unref();
   setInterval(syncPurchaseLogs, PURCHASE_SYNC_SECONDS * 1000).unref();
   setInterval(syncLicenseEventLogs, PURCHASE_SYNC_SECONDS * 1000).unref();
   setInterval(syncContentCreatorLicenses, SYNC_MINUTES * 60 * 1000).unref();
   setInterval(syncSignedPlayerLicenses, SYNC_MINUTES * 60 * 1000).unref();
+  setInterval(expirePendingBets, 60 * 1000).unref();
 });
 
 client.on(Events.InteractionCreate, async (interaction) => {
