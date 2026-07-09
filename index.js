@@ -63,16 +63,6 @@ const licenseApi = createLicenseApi({
   secret: process.env.DISCORD_LICENSE_SECRET
 });
 
-function secretFingerprint(value) {
-  const normalized = String(value || '');
-  if (!normalized) return 'empty';
-  return `${normalized.length}:${crypto.createHash('sha256').update(normalized).digest('hex').slice(0, 10)}`;
-}
-
-console.log(
-  `License API config: url=${process.env.LICENSE_API_URL}, secret=${secretFingerprint(process.env.DISCORD_LICENSE_SECRET)}`
-);
-
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -306,11 +296,40 @@ async function getGiveawayAccessRole(guild) {
   return role;
 }
 
+async function getRoleById(guild, roleId, label) {
+  const role = guild.roles.cache.get(roleId) || await guild.roles.fetch(roleId);
+  if (!role) throw new Error(`No se encontro ${label} en el servidor.`);
+  return role;
+}
+
+async function getContentCreatorRole(guild) {
+  return getRoleById(guild, CONTENT_CREATOR_ROLE_ID, 'CONTENT_CREATOR_ROLE_ID');
+}
+
+async function getSignedPlayerRole(guild) {
+  return getRoleById(guild, SIGNED_PLAYER_ROLE_ID, 'SIGNED_PLAYER_ROLE_ID');
+}
+
+async function getRoleForLicenseSource(guild, source) {
+  if (source === 'shop') return getLimitedAccessRole(guild);
+  if (source === 'giveaway') return getGiveawayAccessRole(guild);
+  if (source === 'content_creator') return getContentCreatorRole(guild);
+  if (source === 'signed_player') return getSignedPlayerRole(guild);
+  const { role } = await getGuildAndRole();
+  return role;
+}
+
+function shouldUseBuyerRole(source) {
+  return !['shop', 'giveaway', 'content_creator', 'signed_player'].includes(source);
+}
+
 function hasLicenseAccessRole(member) {
   return Boolean(
     member?.roles.cache.has(BUYER_ROLE_ID)
     || member?.roles.cache.has(LIMITED_ACCESS_ROLE_ID)
     || member?.roles.cache.has(GIVEAWAY_ACCESS_ROLE_ID)
+    || member?.roles.cache.has(CONTENT_CREATOR_ROLE_ID)
+    || member?.roles.cache.has(SIGNED_PLAYER_ROLE_ID)
   );
 }
 
@@ -360,23 +379,9 @@ async function handleRedeem(interaction) {
     });
 
     const license = data.license;
-    let grantedRole;
-    if (license.source === 'shop') {
-      grantedRole = await getLimitedAccessRole(interaction.guild);
-      if (!member.roles.cache.has(grantedRole.id)) {
-        await member.roles.add(grantedRole, 'Licencia de Zentux Shop activa');
-      }
-    } else if (license.source === 'giveaway') {
-      grantedRole = await getGiveawayAccessRole(interaction.guild);
-      if (!member.roles.cache.has(grantedRole.id)) {
-        await member.roles.add(grantedRole, 'Key de giveaway Zentux canjeada');
-      }
-    } else {
-      const { role } = await getGuildAndRole();
-      grantedRole = role;
-      if (!member.roles.cache.has(role.id)) {
-        await member.roles.add(role, 'Licencia Zentux canjeada y activa');
-      }
+    const grantedRole = await getRoleForLicenseSource(interaction.guild, license.source);
+    if (!member.roles.cache.has(grantedRole.id)) {
+      await member.roles.add(grantedRole, `Licencia Zentux ${licenseOrigin(license).toLowerCase()} activa`);
     }
     redeemAttempts.delete(interaction.user.id);
 
@@ -1078,6 +1083,10 @@ async function syncBuyerRoles() {
     ]);
     const limitedRole = await getLimitedAccessRole(guild);
     const giveawayRole = await getGiveawayAccessRole(guild);
+    const contentCreatorRole = guild.roles.cache.get(CONTENT_CREATOR_ROLE_ID)
+      || await guild.roles.fetch(CONTENT_CREATOR_ROLE_ID).catch(() => null);
+    const signedPlayerRole = guild.roles.cache.get(SIGNED_PLAYER_ROLE_ID)
+      || await guild.roles.fetch(SIGNED_PLAYER_ROLE_ID).catch(() => null);
 
     let added = 0;
     let removed = 0;
@@ -1089,8 +1098,14 @@ async function syncBuyerRoles() {
         ? limitedRole
         : record.source === 'giveaway'
           ? giveawayRole
-          : role;
-      const otherRoles = [role, limitedRole, giveawayRole].filter((candidate) => candidate.id !== expectedRole.id);
+          : record.source === 'content_creator'
+            ? contentCreatorRole
+            : record.source === 'signed_player'
+              ? signedPlayerRole
+              : role;
+      if (!expectedRole) continue;
+      const otherRoles = [role, limitedRole, giveawayRole, contentCreatorRole, signedPlayerRole]
+        .filter((candidate) => candidate && candidate.id !== expectedRole.id);
       const hasExpectedRole = member.roles.cache.has(expectedRole.id);
 
       if (record.active && !hasExpectedRole) {
@@ -1102,6 +1117,14 @@ async function syncBuyerRoles() {
       }
 
       for (const otherRole of otherRoles) {
+        if (!shouldUseBuyerRole(record.source) && otherRole.id === BUYER_ROLE_ID) {
+          if (member.roles.cache.has(otherRole.id)) {
+            await member.roles.remove(otherRole, `${licenseOrigin(record)} usa su propio rol, no Buyer`);
+            removed += 1;
+          }
+          continue;
+        }
+
         if (member.roles.cache.has(otherRole.id)) {
           await member.roles.remove(otherRole, 'Ajuste del tipo de acceso de la licencia Zentux');
           removed += 1;
