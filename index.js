@@ -1191,6 +1191,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (interaction.isButton() && interaction.customId.startsWith('delete_')) {
       return await handleDeleteButton(interaction);
     }
+    if (interaction.isButton() && interaction.customId.startsWith('bet:')) {
+      const betCommand = economyCommands.get('bet');
+      if (betCommand?.handleButton) {
+        return await betCommand.handleButton(interaction, { licenseApi });
+      }
+    }
     if (interaction.isChatInputCommand()) {
       const economyCommand = economyCommands.get(interaction.commandName);
       if (economyCommand) return await economyCommand.execute(interaction, { licenseApi });
