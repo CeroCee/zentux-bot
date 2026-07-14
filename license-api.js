@@ -72,7 +72,8 @@ function createLicenseApi({ baseUrl, secret }) {
     deactivateContentCreator: (guildId, discordUserId) => request('/api/discord/content/deactivate', { guildId, discordUserId }),
     createSignedPlayer: (payload) => request('/api/discord/signed-player/create', payload),
     signedPlayers: (guildId) => request('/api/discord/signed-player/active', { guildId }),
-    deactivateSignedPlayer: (guildId, discordUserId) => request('/api/discord/signed-player/deactivate', { guildId, discordUserId })
+    deactivateSignedPlayer: (guildId, discordUserId) => request('/api/discord/signed-player/deactivate', { guildId, discordUserId }),
+    resetSignedPlayer: (payload) => request('/api/discord/signed-player/reset', payload)
   };
 }
 

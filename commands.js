@@ -10,6 +10,7 @@ const economyCommandModules = [
   require('./commands/leaderboard'),
   require('./commands/admin-money'),
   require('./commands/admin-cooldown'),
+  require('./commands/admin-signed-player'),
   require('./commands/shop'),
   require('./commands/redeem')
 ];
