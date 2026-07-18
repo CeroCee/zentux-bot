@@ -199,6 +199,7 @@ function paymentMethod(license) {
     stripe: 'Stripe',
     giveaway: 'Regalo',
     shop: 'Zentux Shop',
+    reward: 'Zentux Rewards',
     custom: 'Licencia personalizada',
     content_creator: 'Beneficio Content Creator',
     signed_player: 'Beneficio Signed Player',
@@ -210,13 +211,14 @@ function licenseOrigin(license) {
   if (license.source === 'content_creator') return 'Content Creator';
   if (license.source === 'signed_player') return 'Signed Player';
   if (license.source === 'shop') return 'Zentux Shop';
+  if (license.source === 'reward') return 'Zentux Rewards';
   if (license.source === 'giveaway') return 'Regalada';
   if (license.source === 'custom') return 'Personalizada';
   return 'Comprada';
 }
 
 function formatPayment(license) {
-  if (['giveaway', 'custom', 'content_creator', 'signed_player'].includes(license.source)) return 'Gratis';
+  if (['giveaway', 'custom', 'content_creator', 'signed_player', 'reward'].includes(license.source)) return 'Gratis';
   if (!Number.isFinite(license.paymentAmount)) return 'No disponible';
   if (license.paymentCurrency === 'robux') return `${license.paymentAmount.toLocaleString('en-US')} Robux`;
   if (license.paymentCurrency === 'zcoins') return `${license.paymentAmount.toLocaleString('es-ES')} ZCoins`;
@@ -311,7 +313,7 @@ async function getSignedPlayerRole(guild) {
 }
 
 async function getRoleForLicenseSource(guild, source) {
-  if (source === 'shop') return getLimitedAccessRole(guild);
+  if (source === 'shop' || source === 'reward') return getLimitedAccessRole(guild);
   if (source === 'giveaway') return getGiveawayAccessRole(guild);
   if (source === 'content_creator') return getContentCreatorRole(guild);
   if (source === 'signed_player') return getSignedPlayerRole(guild);
@@ -320,7 +322,7 @@ async function getRoleForLicenseSource(guild, source) {
 }
 
 function shouldUseBuyerRole(source) {
-  return !['shop', 'giveaway', 'content_creator', 'signed_player'].includes(source);
+  return !['shop', 'giveaway', 'content_creator', 'signed_player', 'reward'].includes(source);
 }
 
 function hasLicenseAccessRole(member) {
@@ -456,7 +458,10 @@ async function handleInfo(interaction) {
     const data = await licenseApi.info(targetUser.id);
     const license = data.license;
     if (!license.active) {
-      const expiredRoleId = license.source === 'shop' || license.licenseKey?.startsWith('ZENTUX-SHOP-')
+      const expiredRoleId = license.source === 'shop'
+        || license.source === 'reward'
+        || license.licenseKey?.startsWith('ZENTUX-SHOP-')
+        || license.licenseKey?.startsWith('ZENTUX-REWARD-')
         ? LIMITED_ACCESS_ROLE_ID
         : license.source === 'giveaway' || license.licenseKey?.startsWith('ZENTUX-GIFT-')
           ? GIVEAWAY_ACCESS_ROLE_ID
@@ -1094,7 +1099,7 @@ async function syncBuyerRoles() {
       const member = await guild.members.fetch(record.discordUserId).catch(() => null);
       if (!member) continue;
 
-      const expectedRole = record.source === 'shop'
+      const expectedRole = record.source === 'shop' || record.source === 'reward'
         ? limitedRole
         : record.source === 'giveaway'
           ? giveawayRole
