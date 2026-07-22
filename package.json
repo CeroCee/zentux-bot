@@ -7,7 +7,7 @@
     "start": "node index.js",
     "deploy-commands": "node deploy-commands.js",
     "update-profile": "node update-profile.js",
-    "check": "node --check index.js && node --check deploy-commands.js && node --check license-api.js && node --check commands.js && node --check update-profile.js && node --check database/db.js && node --check utils/cooldownManager.js && node --check utils/zcoinMultiplier.js && node --check events/voiceGrind.js && node --check events/reactionsAndQuests.js && node --check events/inviteTracking.js && node --check commands/coins.js && node --check commands/daily.js && node --check commands/transfer.js && node --check commands/bank.js && node --check commands/rob.js && node --check commands/bet.js && node --check commands/leaderboard.js && node --check commands/admin-money.js && node --check commands/admin-cooldown.js && node --check commands/shop.js && node --check commands/redeem.js"
+    "check": "node --check index.js && node --check deploy-commands.js && node --check license-api.js && node --check commands.js && node --check update-profile.js && node --check database/db.js && node --check events/voiceGrind.js && node --check events/reactionsAndQuests.js && node --check events/inviteTracking.js && node --check commands/admin-signed-player.js"
   },
   "keywords": [],
   "author": "",
