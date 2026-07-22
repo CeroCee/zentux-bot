@@ -24,7 +24,6 @@ const { createLicenseApi, LicenseApiError } = require('./license-api');
 
 const requiredEnvironment = [
   'GUILD_ID',
-  'BUYER_ROLE_ID',
   'LICENSE_API_URL',
   'DISCORD_LICENSE_SECRET'
 ];
@@ -39,9 +38,9 @@ if (missingEnvironment.length > 0) {
 }
 
 const GUILD_ID = process.env.GUILD_ID;
-const BUYER_ROLE_ID = process.env.BUYER_ROLE_ID;
-const LIMITED_ACCESS_ROLE_ID = process.env.LIMITED_ACCESS_ROLE_ID || '1424919985209217024';
-const GIVEAWAY_ACCESS_ROLE_ID = process.env.GIVEAWAY_ACCESS_ROLE_ID || '1523246114059587594';
+const BUYER_ROLE_ID = process.env.PAID_BUYER_ROLE_ID || '1392620407483531465';
+const REWARD_ACCESS_ROLE_ID = process.env.REWARD_ACCESS_ROLE_ID || '1523246114059587594';
+const GIVEAWAY_ACCESS_ROLE_ID = process.env.GIVEAWAY_ACCESS_ROLE_ID || '1529323244891410432';
 const CONTENT_CREATOR_ROLE_ID = process.env.CONTENT_CREATOR_ROLE_ID || '1392619993153142834';
 const SIGNED_PLAYER_ROLE_ID = process.env.SIGNED_PLAYER_ROLE_ID || '1524136790594683001';
 const SYNC_MINUTES = Math.max(1, Number.parseInt(process.env.LICENSE_SYNC_MINUTES || '5', 10) || 5);
@@ -283,16 +282,16 @@ async function getGuildAndRole() {
   return { guild, role };
 }
 
-async function getLimitedAccessRole(guild) {
-  const role = guild.roles.cache.get(LIMITED_ACCESS_ROLE_ID)
-    || await guild.roles.fetch(LIMITED_ACCESS_ROLE_ID);
-  if (!role) throw new Error('No se encontro LIMITED_ACCESS_ROLE_ID en el servidor.');
+async function getRewardAccessRole(guild) {
+  const role = guild.roles.cache.get(REWARD_ACCESS_ROLE_ID)
+    || await guild.roles.fetch(REWARD_ACCESS_ROLE_ID);
+  if (!role) throw new Error('No se encontro REWARD_ACCESS_ROLE_ID en el servidor.');
   const botMember = guild.members.me || await guild.members.fetchMe();
   if (!botMember.permissions.has(PermissionFlagsBits.ManageRoles)) {
     throw new Error('El bot no tiene el permiso Manage Roles.');
   }
   if (botMember.roles.highest.comparePositionTo(role) <= 0) {
-    throw new Error('El rol del bot debe estar por encima de Zentux | Limited Access.');
+    throw new Error('El rol del bot debe estar por encima del rol de Zentux Rewards.');
   }
   return role;
 }
@@ -326,7 +325,7 @@ async function getSignedPlayerRole(guild) {
 }
 
 async function getRoleForLicenseSource(guild, source) {
-  if (source === 'shop' || source === 'reward') return getLimitedAccessRole(guild);
+  if (source === 'reward') return getRewardAccessRole(guild);
   if (source === 'giveaway') return getGiveawayAccessRole(guild);
   if (source === 'content_creator') return getContentCreatorRole(guild);
   if (source === 'signed_player') return getSignedPlayerRole(guild);
@@ -335,13 +334,13 @@ async function getRoleForLicenseSource(guild, source) {
 }
 
 function shouldUseBuyerRole(source) {
-  return !['shop', 'giveaway', 'content_creator', 'signed_player', 'reward'].includes(source);
+  return !['giveaway', 'content_creator', 'signed_player', 'reward'].includes(source);
 }
 
 function hasLicenseAccessRole(member) {
   return Boolean(
     member?.roles.cache.has(BUYER_ROLE_ID)
-    || member?.roles.cache.has(LIMITED_ACCESS_ROLE_ID)
+    || member?.roles.cache.has(REWARD_ACCESS_ROLE_ID)
     || member?.roles.cache.has(GIVEAWAY_ACCESS_ROLE_ID)
     || member?.roles.cache.has(CONTENT_CREATOR_ROLE_ID)
     || member?.roles.cache.has(SIGNED_PLAYER_ROLE_ID)
@@ -378,14 +377,6 @@ async function handleRedeem(interaction) {
   try {
     const code = interaction.options.getString('codigo', true).trim().toUpperCase();
     const member = await interaction.guild.members.fetch(interaction.user.id);
-    if (
-      member.roles.cache.has(LIMITED_ACCESS_ROLE_ID)
-      && !code.startsWith('ZENTUX-SHOP-')
-    ) {
-      return interaction.editReply({
-        content: 'Las cuentas con **Zentux | Limited Access** solo pueden usar `/canjear` con una Key comprada en Zentux Shop.'
-      });
-    }
 
     const data = await licenseApi.redeem({
       licenseKey: code,
@@ -476,15 +467,8 @@ async function handleInfo(interaction) {
         });
       }
     } else if (targetMember) {
-      const expiredRoleId = license.source === 'shop'
-        || license.source === 'reward'
-        || license.licenseKey?.startsWith('ZENTUX-SHOP-')
-        || license.licenseKey?.startsWith('ZENTUX-REWARD-')
-        ? LIMITED_ACCESS_ROLE_ID
-        : license.source === 'giveaway' || license.licenseKey?.startsWith('ZENTUX-GIFT-')
-          ? GIVEAWAY_ACCESS_ROLE_ID
-          : BUYER_ROLE_ID;
-      await targetMember.roles.remove(expiredRoleId, 'Licencia Zentux inactiva o vencida').catch(() => null);
+      const expiredRole = await getRoleForLicenseSource(interaction.guild, license.source);
+      await targetMember.roles.remove(expiredRole, 'Licencia Zentux inactiva o vencida').catch(() => null);
     }
 
     const embed = brandEmbed({
@@ -1104,7 +1088,7 @@ async function syncBuyerRoles() {
       getGuildAndRole(),
       licenseApi.members()
     ]);
-    const limitedRole = await getLimitedAccessRole(guild);
+    const rewardRole = await getRewardAccessRole(guild);
     const giveawayRole = await getGiveawayAccessRole(guild);
     const contentCreatorRole = guild.roles.cache.get(CONTENT_CREATOR_ROLE_ID)
       || await guild.roles.fetch(CONTENT_CREATOR_ROLE_ID).catch(() => null);
@@ -1117,8 +1101,8 @@ async function syncBuyerRoles() {
       const member = await guild.members.fetch(record.discordUserId).catch(() => null);
       if (!member) continue;
 
-      const expectedRole = record.source === 'shop' || record.source === 'reward'
-        ? limitedRole
+      const expectedRole = record.source === 'reward'
+        ? rewardRole
         : record.source === 'giveaway'
           ? giveawayRole
           : record.source === 'content_creator'
@@ -1127,7 +1111,7 @@ async function syncBuyerRoles() {
               ? signedPlayerRole
               : role;
       if (!expectedRole) continue;
-      const otherRoles = [role, limitedRole, giveawayRole, contentCreatorRole, signedPlayerRole]
+      const otherRoles = [role, rewardRole, giveawayRole, contentCreatorRole, signedPlayerRole]
         .filter((candidate) => candidate && candidate.id !== expectedRole.id);
       const hasExpectedRole = member.roles.cache.has(expectedRole.id);
 
