@@ -81,6 +81,8 @@ function formatVoiceDuration(minutes) {
 }
 
 async function announceDailyVoiceWinner(client, winnerId, minutes, date) {
+  return false;
+
   const channel = await client.channels.fetch(VOICE_DAILY_ANNOUNCEMENT_CHANNEL_ID).catch(() => null);
   if (!channel?.isTextBased?.()) {
     console.warn(
@@ -110,6 +112,8 @@ async function announceDailyVoiceWinner(client, winnerId, minutes, date) {
 }
 
 async function awardAndResetDailyVoiceLeaderboard(client, licenseApi, now = new Date()) {
+  return { changed: false, disabled: true };
+
   const currentDate = getVoiceDayKey(now);
   const previousDate = getSetting(VOICE_DAILY_DATE_SETTING);
 
@@ -143,6 +147,8 @@ async function awardAndResetDailyVoiceLeaderboard(client, licenseApi, now = new 
 }
 
 function initializeDailyVoiceLeaderboard(now = new Date()) {
+  return { reset: false, disabled: true };
+
   const currentDate = getVoiceDayKey(now);
   if (getSetting(VOICE_DAILY_RESET_VERSION_SETTING) !== '1') {
     const resetUsers = resetVoiceMinutes();
@@ -272,8 +278,6 @@ async function fetchAuthorizedChannels(client) {
 }
 
 async function checkVoiceRewards(client, scope, now = Date.now()) {
-  await awardAndResetDailyVoiceLeaderboard(client, client.licenseApi, new Date(now));
-
   const activeStates = getActiveVoiceStates(client);
   const activeKeys = new Set(activeStates.keys());
   let rewardedUsers = 0;
@@ -320,7 +324,6 @@ function register(client) {
 
   client.once(Events.ClientReady, async () => {
     await createAuthorizedScope(client);
-    initializeDailyVoiceLeaderboard();
     const channels = await fetchAuthorizedChannels(client);
     const seededUsers = seedActiveVoiceSessions(client);
 
