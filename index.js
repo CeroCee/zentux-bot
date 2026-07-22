@@ -464,13 +464,18 @@ async function handleInfo(interaction) {
     }
 
     const targetMember = await interaction.guild.members.fetch(targetUser.id).catch(() => null);
-    if (!hasLicenseAccessRole(targetMember)) {
-      return interaction.editReply({ content: 'Esa persona no tiene un acceso de licencia activo en Zentux.' });
-    }
-
     const data = await licenseApi.info(targetUser.id);
     const license = data.license;
-    if (!license.active) {
+    if (license.active) {
+      const expectedRole = targetMember
+        ? await getRoleForLicenseSource(interaction.guild, license.source)
+        : null;
+      if (targetMember && expectedRole && !targetMember.roles.cache.has(expectedRole.id)) {
+        await targetMember.roles.add(expectedRole, 'Licencia Zentux activa vinculada desde web o Discord').catch((error) => {
+          console.error(`No se pudo asignar rol de licencia a ${targetUser.id}:`, error.message);
+        });
+      }
+    } else if (targetMember) {
       const expiredRoleId = license.source === 'shop'
         || license.source === 'reward'
         || license.licenseKey?.startsWith('ZENTUX-SHOP-')
