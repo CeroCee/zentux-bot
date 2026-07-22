@@ -1,18 +1,7 @@
 const { ChannelType, PermissionFlagsBits, SlashCommandBuilder } = require('discord.js');
 
 const economyCommandModules = [
-  require('./commands/coins'),
-  require('./commands/daily'),
-  require('./commands/transfer'),
-  require('./commands/bank'),
-  require('./commands/rob'),
-  require('./commands/bet'),
-  require('./commands/leaderboard'),
-  require('./commands/admin-money'),
-  require('./commands/admin-cooldown'),
-  require('./commands/admin-signed-player'),
-  require('./commands/shop'),
-  require('./commands/redeem')
+  require('./commands/admin-signed-player')
 ];
 
 const commands = [

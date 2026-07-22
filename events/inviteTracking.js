@@ -1,7 +1,6 @@
 const { Events, PermissionFlagsBits } = require('discord.js');
 const { db, addXp, incrementInvites } = require('../database/db');
 const { checkQuests } = require('./reactionsAndQuests');
-const { applyZCoinMultiplier } = require('../utils/zcoinMultiplier');
 
 const INVITE_XP = 25;
 const inviteCache = new Map();
@@ -54,22 +53,6 @@ const prepareInviteReward = db.transaction((inviterId) => {
 
 async function rewardInviteTransaction(inviterId, licenseApi, guild) {
   const result = prepareInviteReward(inviterId);
-  if (result.quest.comboAwarded) {
-    const comboReward = await applyZCoinMultiplier({
-      guild,
-      userId: inviterId,
-      amount: 100,
-      reason: 'Combo diario: 3 misiones completadas'
-    });
-    await licenseApi.economyAdd({
-      discordUserId: inviterId,
-      amount: comboReward.amount,
-      currency: 'zcoins',
-      bucket: 'pocket',
-      reason: comboReward.reason,
-      referenceId: `combo:${inviterId}:${result.quest.date}`
-    });
-  }
   return result;
 }
 

@@ -47,6 +47,19 @@ const SIGNED_PLAYER_ROLE_ID = process.env.SIGNED_PLAYER_ROLE_ID || '152413679059
 const SYNC_MINUTES = Math.max(1, Number.parseInt(process.env.LICENSE_SYNC_MINUTES || '5', 10) || 5);
 const PURCHASE_SYNC_SECONDS = Math.max(15, Number.parseInt(process.env.PURCHASE_SYNC_SECONDS || '30', 10) || 30);
 const EPHEMERAL = MessageFlags.Ephemeral;
+const DISABLED_ZCOIN_COMMANDS = new Set([
+  'coins',
+  'daily',
+  'transfer',
+  'bank',
+  'rob',
+  'bet',
+  'leaderboard',
+  'admin-money',
+  'admin-cooldown',
+  'shop',
+  'redeem'
+]);
 const BOT_DISPLAY_NAME = '𝒁𝒆𝒏𝒕𝒖𝒙';
 const DOWNLOAD_URL = 'https://www.zentux.gg/';
 const STRIPE_URL = 'https://buy.stripe.com/8x29ALdMMeKmcSs60q1wY01';
@@ -1145,6 +1158,7 @@ async function syncBuyerRoles() {
 }
 
 async function expirePendingBets() {
+  if (DISABLED_ZCOIN_COMMANDS.has('bet')) return;
   try {
     const result = await licenseApi.economyBetExpire();
     const count = result.expired?.length || 0;
@@ -1155,12 +1169,7 @@ async function expirePendingBets() {
 }
 
 client.once(Events.ClientReady, async (readyClient) => {
-  try {
-    const migration = await licenseApi.economyMigrate(database.listUsersForMigration());
-    console.log(`Economia central sincronizada: ${migration.migrated} usuario(s) migrados.`);
-  } catch (error) {
-    console.error('No se pudo migrar la economia local al servidor central:', error.message);
-  }
+  console.log('Sistema de Z-Coins retirado: se omite la migracion de economia local.');
   console.log(`Bot listo como ${readyClient.user.tag}`);
   await syncApplicationCommands();
   readyClient.user.setPresence({
@@ -1197,12 +1206,18 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return await handleDeleteButton(interaction);
     }
     if (interaction.isButton() && interaction.customId.startsWith('bet:')) {
-      const betCommand = economyCommands.get('bet');
-      if (betCommand?.handleButton) {
-        return await betCommand.handleButton(interaction, { licenseApi });
-      }
+      return await interaction.reply({
+        content: 'El sistema de Z-Coins y apuestas fue retirado de Zentux.',
+        flags: EPHEMERAL
+      });
     }
     if (interaction.isChatInputCommand()) {
+      if (DISABLED_ZCOIN_COMMANDS.has(interaction.commandName)) {
+        return await interaction.reply({
+          content: 'El sistema de Z-Coins fue retirado de Zentux. Este comando ya no está disponible.',
+          flags: EPHEMERAL
+        });
+      }
       const economyCommand = economyCommands.get(interaction.commandName);
       if (economyCommand) return await economyCommand.execute(interaction, { licenseApi });
       if (interaction.commandName === 'canjear') return await handleRedeem(interaction);

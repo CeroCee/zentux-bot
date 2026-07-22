@@ -11,11 +11,10 @@ const {
   setSetting
 } = require('../database/db');
 const { checkQuests } = require('./reactionsAndQuests');
-const { applyZCoinMultiplier } = require('../utils/zcoinMultiplier');
 
 const ONE_MINUTE_MS = 60 * 1000;
 const CHECK_INTERVAL_MS = ONE_MINUTE_MS;
-const COINS_PER_MINUTE = 0.5;
+const COINS_PER_MINUTE = 0;
 const XP_INTERVAL_MINUTES = 5;
 const VOICE_DAILY_REWARD = 1000;
 const VOICE_DAILY_TIMEZONE = process.env.VOICE_DAILY_TIMEZONE || 'America/New_York';
@@ -34,7 +33,6 @@ const prepareVoiceReward = db.transaction((userId, minutes = 1) => {
   }
 
   const before = getOrCreateUser(userId);
-  const coins = normalizedMinutes * COINS_PER_MINUTE;
   const reason = `Voice Grind: ${normalizedMinutes} minuto(s) en voz`;
   const afterVoice = incrementVoiceMinutes(userId, normalizedMinutes);
   const quest = checkQuests(userId, 'voice', normalizedMinutes);
@@ -45,7 +43,7 @@ const prepareVoiceReward = db.transaction((userId, minutes = 1) => {
   if (xpEarned > 0) addXp(userId, xpEarned, reason);
 
   return {
-    coins,
+    coins: 0,
     minutes: normalizedMinutes,
     xpEarned,
     quest,
@@ -55,41 +53,9 @@ const prepareVoiceReward = db.transaction((userId, minutes = 1) => {
 
 async function rewardVoiceTransaction(userId, minutes, licenseApi, referenceId, guild) {
   const result = prepareVoiceReward(userId, minutes);
-  const reward = await applyZCoinMultiplier({
-    guild,
-    userId,
-    amount: result.coins,
-    reason: `Voice Grind: ${result.minutes} minuto(s) en voz`
-  });
-  await licenseApi.economyAdd({
-    discordUserId: userId,
-    amount: reward.amount,
-    currency: 'zcoins',
-    bucket: 'pocket',
-    reason: reward.reason,
-    referenceId
-  });
-
-  if (result.quest?.comboAwarded) {
-    const comboReward = await applyZCoinMultiplier({
-      guild,
-      userId,
-      amount: 100,
-      reason: 'Combo diario: 3 misiones completadas'
-    });
-    await licenseApi.economyAdd({
-      discordUserId: userId,
-      amount: comboReward.amount,
-      currency: 'zcoins',
-      bucket: 'pocket',
-      reason: comboReward.reason,
-      referenceId: `combo:${userId}:${result.quest.date}`
-    });
-  }
-
-  result.coins = reward.amount;
-  result.multiplier = reward.multiplier;
-  result.bonus = reward.bonus;
+  result.coins = 0;
+  result.multiplier = 1;
+  result.bonus = 0;
   return result;
 }
 
@@ -131,7 +97,7 @@ async function announceDailyVoiceWinner(client, winnerId, minutes, date) {
       '',
       `Fue la persona con más tiempo en voz durante el día **${date}**.`,
       `Tiempo registrado: **${formatVoiceDuration(minutes)}**.`,
-      `Recompensa entregada: **${VOICE_DAILY_REWARD.toLocaleString('es-ES')} Z-Coins**.`
+      'El sistema de Z-Coins fue retirado, así que este anuncio es solo informativo.'
     ].join('\n'))
     .setFooter({ text: 'Zentux Voice Leaderboard • el contador diario fue reiniciado' })
     .setTimestamp();
@@ -160,24 +126,10 @@ async function awardAndResetDailyVoiceLeaderboard(client, licenseApi, now = new 
   const winnerMinutes = Math.floor(Number(winner?.score) || 0);
 
   if (winner?.userId && winnerMinutes > 0) {
-    const reward = await applyZCoinMultiplier({
-      guild: client.guilds.cache.first(),
-      userId: winner.userId,
-      amount: VOICE_DAILY_REWARD,
-      reason: `Premio diario de voz (${previousDate})`
-    });
-    await licenseApi.economyAdd({
-      discordUserId: winner.userId,
-      amount: reward.amount,
-      currency: 'zcoins',
-      bucket: 'pocket',
-      reason: reward.reason,
-      referenceId: `voice-daily-winner:${previousDate}`
-    });
     recordVoiceDailyAward(previousDate, winner.userId, winnerMinutes);
     await announceDailyVoiceWinner(client, winner.userId, winnerMinutes, previousDate);
     console.log(
-      `Ganador diario de voz ${previousDate}: ${winner.userId}, ${winnerMinutes} minuto(s), +${VOICE_DAILY_REWARD} ZCoins.`
+      `Ganador diario de voz ${previousDate}: ${winner.userId}, ${winnerMinutes} minuto(s).`
     );
   } else {
     recordVoiceDailyAward(previousDate, null, 0);
@@ -336,7 +288,7 @@ async function checkVoiceRewards(client, scope, now = Date.now()) {
       rewardedUsers += 1;
       creditedMinutes += result.minutes;
     } catch (error) {
-      console.error(`No se pudieron acreditar ZCoins a ${voiceState.id}:`, error.message);
+      console.error(`No se pudo registrar tiempo de voz para ${voiceState.id}:`, error.message);
     }
   }
 
@@ -345,9 +297,8 @@ async function checkVoiceRewards(client, scope, now = Date.now()) {
   }
 
   if (rewardedUsers > 0) {
-    const creditedCoins = (creditedMinutes * COINS_PER_MINUTE).toFixed(2);
     console.log(
-      `Voice Grind global: ${rewardedUsers} usuario(s), ${creditedMinutes} minuto(s), +${creditedCoins} ZCoins.`
+      `Voice Grind global: ${rewardedUsers} usuario(s), ${creditedMinutes} minuto(s) registrado(s).`
     );
   }
 

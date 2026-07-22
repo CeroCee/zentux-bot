@@ -6,14 +6,9 @@ const {
   getOrCreateUser,
   incrementReactions
 } = require('../database/db');
-const { applyZCoinMultiplier } = require('../utils/zcoinMultiplier');
 
-const REACTION_REWARD = 10;
-const MAX_DAILY_REACTION_REWARD = 100;
 const REACTION_REASON = 'Reaccion en anuncios';
 const REACTION_XP = 5;
-const COMBO_REWARD = 100;
-const COMBO_REASON = 'Combo diario: 3 misiones completadas';
 const COMBO_QUEST_ID = 'daily_combo_bonus';
 const COMBO_XP = 50;
 
@@ -180,20 +175,13 @@ const prepareReactionReward = db.transaction((userId, messageId) => {
   incrementReactions(normalizedUserId, 1);
 
   const date = currentDate();
-  const rewardedClaims = Number(getReactionClaimsTodayQuery.get(normalizedUserId, date).total);
-  const earned = Math.max(0, (rewardedClaims - 1) * REACTION_REWARD);
-
-  if (earned >= MAX_DAILY_REACTION_REWARD) {
-    return { rewarded: false, duplicate: false, earned, quest: null };
-  }
-
   const xp = addXp(normalizedUserId, REACTION_XP, REACTION_REASON);
   const quest = checkQuests(normalizedUserId, 'reaction');
 
   return {
     rewarded: true,
     duplicate: false,
-    earned: earned + REACTION_REWARD,
+    earned: 0,
     xp,
     quest
   };
@@ -201,40 +189,9 @@ const prepareReactionReward = db.transaction((userId, messageId) => {
 
 async function rewardReactionTransaction(userId, messageId, licenseApi, guild) {
   const result = prepareReactionReward(userId, messageId);
-  if (!result.rewarded) return result;
-  const reward = await applyZCoinMultiplier({
-    guild,
-    userId,
-    amount: REACTION_REWARD,
-    reason: REACTION_REASON
-  });
-  await licenseApi.economyAdd({
-    discordUserId: userId,
-    amount: reward.amount,
-    currency: 'zcoins',
-    bucket: 'pocket',
-    reason: reward.reason,
-    referenceId: `reaction:${userId}:${messageId}`
-  });
-  if (result.quest?.comboAwarded) {
-    const comboReward = await applyZCoinMultiplier({
-      guild,
-      userId,
-      amount: COMBO_REWARD,
-      reason: COMBO_REASON
-    });
-    await licenseApi.economyAdd({
-      discordUserId: userId,
-      amount: comboReward.amount,
-      currency: 'zcoins',
-      bucket: 'pocket',
-      reason: comboReward.reason,
-      referenceId: `combo:${userId}:${result.quest.date}`
-    });
-  }
-  result.coins = reward.amount;
-  result.multiplier = reward.multiplier;
-  result.bonus = reward.bonus;
+  result.coins = 0;
+  result.multiplier = 1;
+  result.bonus = 0;
   return result;
 }
 
@@ -276,7 +233,7 @@ async function handleReaction(reaction, user, announcementChannelId, rewardsStar
 
   const result = await rewardReactionTransaction(user.id, reaction.message.id, licenseApi, reaction.message.guild);
   if (result.quest?.comboAwarded) {
-    console.log(`Combo diario otorgado a ${user.id}: +${COMBO_REWARD} ZCoins.`);
+    console.log(`Combo diario completado por ${user.id}; Z-Coins retirado, sin recompensa monetaria.`);
   }
 }
 
