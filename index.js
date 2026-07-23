@@ -1115,12 +1115,20 @@ async function syncBuyerRoles() {
               ? signedPlayerRole
               : role;
       if (!expectedRole) continue;
+      const hasPriorityManualRole = ['content_creator', 'signed_player'].includes(record.source)
+        ? false
+        : member.roles.cache.has(CONTENT_CREATOR_ROLE_ID) || member.roles.cache.has(SIGNED_PLAYER_ROLE_ID);
       const otherRoles = [role, rewardRole, giveawayRole, contentCreatorRole, signedPlayerRole]
         .filter((candidate) => candidate && candidate.id !== expectedRole.id)
         .filter((candidate) => !protectedManualRoleIds.has(candidate.id));
       const hasExpectedRole = member.roles.cache.has(expectedRole.id);
 
-      if (record.active && !hasExpectedRole) {
+      if (hasPriorityManualRole) {
+        if (hasExpectedRole) {
+          await member.roles.remove(expectedRole, 'Content Creator/Signed Player reemplaza este acceso Zentux');
+          removed += 1;
+        }
+      } else if (record.active && !hasExpectedRole) {
         await member.roles.add(expectedRole, 'Sincronizacion de licencia Zentux activa');
         added += 1;
       } else if (!record.active && hasExpectedRole) {
@@ -1148,6 +1156,72 @@ async function syncBuyerRoles() {
     console.error('No se pudieron sincronizar los roles:', error.code || error.message);
   } finally {
     roleSyncRunning = false;
+  }
+}
+
+async function removeConflictingAccessRoles(member, reason) {
+  const conflictingRoleIds = [
+    BUYER_ROLE_ID,
+    REWARD_ACCESS_ROLE_ID,
+    GIVEAWAY_ACCESS_ROLE_ID
+  ];
+
+  for (const roleId of conflictingRoleIds) {
+    if (!roleId || !member.roles.cache.has(roleId)) continue;
+    await member.roles.remove(roleId, reason).catch((error) => {
+      console.error(`No se pudo retirar el rol conflictivo ${roleId} de ${member.id}:`, error.message);
+    });
+  }
+}
+
+async function handlePriorityRoleAdded(oldMember, newMember) {
+  if (newMember.guild.id !== GUILD_ID || newMember.user.bot) return;
+
+  const contentCreatorAdded = !oldMember.roles.cache.has(CONTENT_CREATOR_ROLE_ID)
+    && newMember.roles.cache.has(CONTENT_CREATOR_ROLE_ID);
+  const signedPlayerAdded = !oldMember.roles.cache.has(SIGNED_PLAYER_ROLE_ID)
+    && newMember.roles.cache.has(SIGNED_PLAYER_ROLE_ID);
+
+  if (!contentCreatorAdded && !signedPlayerAdded) return;
+
+  try {
+    if (contentCreatorAdded) {
+      const data = await licenseApi.createContentCreator({
+        guildId: newMember.guild.id,
+        discordUserId: newMember.id,
+        discordUsername: newMember.displayName || newMember.user.username
+      }).catch((error) => {
+        if (error.code === 'already_claimed') return null;
+        throw error;
+      });
+      await removeConflictingAccessRoles(
+        newMember,
+        'Content Creator reemplaza otros accesos Zentux'
+      );
+      if (data?.license?.licenseKey) {
+        console.log(`Content Creator priorizado para ${newMember.id}: ${data.license.licenseKey}`);
+      }
+    }
+
+    if (signedPlayerAdded) {
+      const data = await licenseApi.createSignedPlayer({
+        guildId: newMember.guild.id,
+        discordUserId: newMember.id,
+        discordUsername: newMember.displayName || newMember.user.username
+      }).catch((error) => {
+        if (error.code === 'already_claimed') return null;
+        throw error;
+      });
+      await removeConflictingAccessRoles(
+        newMember,
+        'Signed Player reemplaza otros accesos Zentux'
+      );
+      if (data?.license?.licenseKey) {
+        console.log(`Signed Player priorizado para ${newMember.id}: ${data.license.licenseKey}`);
+      }
+    }
+  } catch (error) {
+    console.error('No se pudo priorizar el rol manual de licencia:', error.code || error.message);
   }
 }
 
@@ -1189,6 +1263,12 @@ client.once(Events.ClientReady, async (readyClient) => {
   setInterval(syncContentCreatorLicenses, SYNC_MINUTES * 60 * 1000).unref();
   setInterval(syncSignedPlayerLicenses, SYNC_MINUTES * 60 * 1000).unref();
   setInterval(expirePendingBets, 60 * 1000).unref();
+});
+
+client.on(Events.GuildMemberUpdate, (oldMember, newMember) => {
+  handlePriorityRoleAdded(oldMember, newMember).catch((error) => {
+    console.error('No se pudo procesar cambio de roles prioritarios:', error.code || error.message);
+  });
 });
 
 client.on(Events.InteractionCreate, async (interaction) => {
