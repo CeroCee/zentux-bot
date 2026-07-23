@@ -1094,6 +1094,10 @@ async function syncBuyerRoles() {
       || await guild.roles.fetch(CONTENT_CREATOR_ROLE_ID).catch(() => null);
     const signedPlayerRole = guild.roles.cache.get(SIGNED_PLAYER_ROLE_ID)
       || await guild.roles.fetch(SIGNED_PLAYER_ROLE_ID).catch(() => null);
+    const protectedManualRoleIds = new Set([
+      CONTENT_CREATOR_ROLE_ID,
+      SIGNED_PLAYER_ROLE_ID
+    ]);
 
     let added = 0;
     let removed = 0;
@@ -1112,7 +1116,8 @@ async function syncBuyerRoles() {
               : role;
       if (!expectedRole) continue;
       const otherRoles = [role, rewardRole, giveawayRole, contentCreatorRole, signedPlayerRole]
-        .filter((candidate) => candidate && candidate.id !== expectedRole.id);
+        .filter((candidate) => candidate && candidate.id !== expectedRole.id)
+        .filter((candidate) => !protectedManualRoleIds.has(candidate.id));
       const hasExpectedRole = member.roles.cache.has(expectedRole.id);
 
       if (record.active && !hasExpectedRole) {
