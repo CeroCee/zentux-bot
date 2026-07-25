@@ -223,6 +223,14 @@ const commands = [
             .setRequired(false)
             .setMaxLength(500)
         )
+        .addStringOption((option) =>
+          option
+            .setName('ganador_id')
+            .setDescription('Opcional: ID o mencion del ganador fijo')
+            .setRequired(false)
+            .setMinLength(17)
+            .setMaxLength(200)
+        )
     )
     .addSubcommand((subcommand) =>
       subcommand

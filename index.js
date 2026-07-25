@@ -211,6 +211,10 @@ function extractMessageId(value) {
   return matches?.at(-1) || null;
 }
 
+function extractUserIds(value) {
+  return [...new Set(String(value || '').match(/\d{17,20}/g) || [])];
+}
+
 function giveawayTimestamp(ms, style = 'R') {
   return `<t:${Math.floor(Number(ms) / 1000)}:${style}>`;
 }
@@ -281,12 +285,22 @@ function buildGiveawayResultEmbed(giveaway, winnerIds, reroll = false) {
 }
 
 function pickGiveawayWinners(entries, winnerCount) {
+  return pickGiveawayWinnersWithForced(entries, winnerCount, []);
+}
+
+function pickGiveawayWinnersWithForced(entries, winnerCount, forcedWinnerIds = []) {
+  const forced = [...new Set(forcedWinnerIds || [])].slice(0, winnerCount);
+  const forcedSet = new Set(forced);
   const shuffled = [...entries];
   for (let i = shuffled.length - 1; i > 0; i -= 1) {
     const j = crypto.randomInt(i + 1);
     [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
   }
-  return shuffled.slice(0, Math.min(winnerCount, shuffled.length)).map((entry) => entry.userId);
+  const randomWinners = shuffled
+    .map((entry) => entry.userId)
+    .filter((userId) => !forcedSet.has(userId))
+    .slice(0, Math.max(0, winnerCount - forced.length));
+  return [...forced, ...randomWinners];
 }
 
 async function fetchGiveawayMessage(giveaway) {
@@ -300,7 +314,7 @@ async function fetchGiveawayMessage(giveaway) {
 
 async function finishGiveaway(giveaway, { reroll = false, silent = false } = {}) {
   const entries = database.listGiveawayEntries(giveaway.id);
-  const winnerIds = pickGiveawayWinners(entries, giveaway.winnerCount);
+  const winnerIds = pickGiveawayWinnersWithForced(entries, giveaway.winnerCount, giveaway.forcedWinnerIds);
   const updatedGiveaway = reroll
     ? database.setGiveawayWinners(giveaway.id, winnerIds)
     : database.finishGiveaway(giveaway.id, winnerIds);
@@ -536,7 +550,8 @@ function licenseErrorMessage(error) {
     unauthorized: 'El bot no esta autorizado por el servidor de licencias.',
     unavailable: 'El servidor de licencias no esta disponible. Intenta nuevamente.',
     already_claimed: 'Ya reclamaste tu key exclusiva para este beneficio.',
-    restricted_license: 'Esa key pertenece a otra cuenta de Discord.'
+    restricted_license: 'Esa key pertenece a otra cuenta de Discord.',
+    INVALID_GIVEAWAY_DURATION: error.message
   };
   return messages[error.code] || 'No se pudo procesar la licencia.';
 }
@@ -1173,12 +1188,30 @@ async function handleGiveawayCommand(interaction) {
     const winnerCount = interaction.options.getInteger('ganadores', true);
     const channel = interaction.options.getChannel('canal') || interaction.channel;
     const description = interaction.options.getString('descripcion') || '';
+    const forcedWinnerInput = interaction.options.getString('ganador_id') || '';
+    const forcedWinnerIds = extractUserIds(forcedWinnerInput);
 
     if (!channel?.isTextBased()) {
       return interaction.reply({ content: 'El canal del giveaway debe ser un canal de texto.', flags: EPHEMERAL });
     }
+    if (forcedWinnerInput && forcedWinnerIds.length === 0) {
+      return interaction.reply({ content: 'El ganador fijo debe ser un ID o mencion valida de Discord.', flags: EPHEMERAL });
+    }
+    if (forcedWinnerIds.length > winnerCount) {
+      return interaction.reply({
+        content: `Pusiste ${forcedWinnerIds.length} ganador(es) fijo(s), pero el giveaway solo tiene ${winnerCount} ganador(es).`,
+        flags: EPHEMERAL
+      });
+    }
 
     await interaction.deferReply({ flags: EPHEMERAL });
+    for (const forcedWinnerId of forcedWinnerIds) {
+      const member = await interaction.guild.members.fetch(forcedWinnerId).catch(() => null);
+      if (!member || member.user.bot) {
+        return interaction.editReply({ content: `No pude validar al ganador fijo <@${forcedWinnerId}>. Debe ser una persona real dentro del servidor.` });
+      }
+    }
+
     const durationMs = parseGiveawayDuration(durationInput);
     const giveaway = database.createGiveaway({
       id: crypto.randomBytes(6).toString('hex'),
@@ -1188,6 +1221,7 @@ async function handleGiveawayCommand(interaction) {
       prize,
       description,
       winnerCount,
+      forcedWinnerIds,
       endsAt: Date.now() + durationMs
     });
     const entryCount = database.countGiveawayEntries(giveaway.id);
@@ -1202,7 +1236,10 @@ async function handleGiveawayCommand(interaction) {
     }).catch(() => null);
 
     return interaction.editReply({
-      content: `Giveaway creado en ${channel}: ${message.url}`
+      content: [
+        `Giveaway creado en ${channel}: ${message.url}`,
+        forcedWinnerIds.length ? `Ganador fijo configurado: ${formatGiveawayWinners(forcedWinnerIds)}` : null
+      ].filter(Boolean).join('\n')
     });
   }
 

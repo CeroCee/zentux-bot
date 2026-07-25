@@ -86,6 +86,7 @@ db.exec(`
     endsAt INTEGER NOT NULL,
     status TEXT NOT NULL DEFAULT 'active',
     winnersJson TEXT NOT NULL DEFAULT '[]',
+    forcedWinnerIdsJson TEXT NOT NULL DEFAULT '[]',
     createdAt INTEGER NOT NULL,
     endedAt INTEGER
   );
@@ -135,6 +136,18 @@ const existingUserColumns = new Set(
 for (const [columnName, definition] of Object.entries(requiredUserColumns)) {
   if (!existingUserColumns.has(columnName)) {
     db.exec(`ALTER TABLE users ADD COLUMN ${columnName} ${definition};`);
+  }
+}
+
+const requiredGiveawayColumns = {
+  forcedWinnerIdsJson: "TEXT NOT NULL DEFAULT '[]'"
+};
+const existingGiveawayColumns = new Set(
+  db.pragma('table_info(giveaways)').map((column) => column.name)
+);
+for (const [columnName, definition] of Object.entries(requiredGiveawayColumns)) {
+  if (!existingGiveawayColumns.has(columnName)) {
+    db.exec(`ALTER TABLE giveaways ADD COLUMN ${columnName} ${definition};`);
   }
 }
 
@@ -264,9 +277,9 @@ const queries = {
   createGiveaway: db.prepare(`
     INSERT INTO giveaways (
       id, guildId, channelId, messageId, prize, description,
-      winnerCount, hostId, endsAt, status, winnersJson, createdAt
+      winnerCount, hostId, endsAt, status, winnersJson, forcedWinnerIdsJson, createdAt
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', '[]', ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', '[]', ?, ?)
   `),
 
   updateGiveawayMessageId: db.prepare(`
@@ -650,10 +663,16 @@ function normalizeGiveawayId(giveawayId) {
 function hydrateGiveaway(row) {
   if (!row) return null;
   let winners = [];
+  let forcedWinnerIds = [];
   try {
     winners = JSON.parse(row.winnersJson || '[]');
   } catch {
     winners = [];
+  }
+  try {
+    forcedWinnerIds = JSON.parse(row.forcedWinnerIdsJson || '[]');
+  } catch {
+    forcedWinnerIds = [];
   }
   return {
     ...row,
@@ -661,7 +680,8 @@ function hydrateGiveaway(row) {
     endsAt: Number(row.endsAt),
     createdAt: Number(row.createdAt),
     endedAt: row.endedAt === null ? null : Number(row.endedAt),
-    winners
+    winners,
+    forcedWinnerIds
   };
 }
 
@@ -674,6 +694,9 @@ function createGiveaway(giveaway) {
   if (!prize) throw new TypeError('prize es obligatorio.');
   const description = String(giveaway.description || '').trim() || null;
   const winnerCount = Math.min(Math.max(Number.parseInt(giveaway.winnerCount, 10) || 1, 1), 50);
+  const forcedWinnerIds = Array.isArray(giveaway.forcedWinnerIds)
+    ? [...new Set(giveaway.forcedWinnerIds.map((userId) => validateUserId(userId)))]
+    : [];
   const endsAt = Number.parseInt(giveaway.endsAt, 10);
   if (!Number.isSafeInteger(endsAt) || endsAt <= Date.now()) {
     throw new TypeError('endsAt debe ser una fecha futura en milisegundos.');
@@ -690,6 +713,7 @@ function createGiveaway(giveaway) {
     winnerCount,
     hostId,
     endsAt,
+    JSON.stringify(forcedWinnerIds),
     createdAt
   );
   return getGiveawayById(id);
