@@ -1236,6 +1236,38 @@ async function expirePendingBets() {
   }
 }
 
+async function getDiscordPresenceSnapshot() {
+  const guild = await client.guilds.fetch({ guild: GUILD_ID, withCounts: true });
+  const onlineCount = Number.parseInt(
+    guild.approximatePresenceCount ?? guild.approximate_presence_count ?? 0,
+    10
+  );
+  const memberCount = Number.parseInt(
+    guild.approximateMemberCount ?? guild.approximate_member_count ?? guild.memberCount ?? 0,
+    10
+  );
+
+  return {
+    onlineCount: Number.isInteger(onlineCount) && onlineCount >= 0 ? onlineCount : 0,
+    memberCount: Number.isInteger(memberCount) && memberCount >= 0 ? memberCount : null
+  };
+}
+
+async function syncSitePresence() {
+  try {
+    const snapshot = await getDiscordPresenceSnapshot();
+    await licenseApi.updateSitePresence({
+      guildId: GUILD_ID,
+      onlineCount: snapshot.onlineCount,
+      memberCount: snapshot.memberCount,
+      source: 'discord_with_counts'
+    });
+    console.log(`Presencia web actualizada: online=${snapshot.onlineCount}, members=${snapshot.memberCount ?? 'n/a'}.`);
+  } catch (error) {
+    console.error('No se pudo actualizar la presencia web:', error.code || error.message);
+  }
+}
+
 client.once(Events.ClientReady, async (readyClient) => {
   console.log('Sistema de Z-Coins retirado: se omite la migracion de economia local.');
   console.log(`Bot listo como ${readyClient.user.tag}`);
@@ -1256,12 +1288,14 @@ client.once(Events.ClientReady, async (readyClient) => {
   await syncLicenseEventLogs();
   await syncContentCreatorLicenses();
   await syncSignedPlayerLicenses();
+  await syncSitePresence();
   await expirePendingBets();
   setInterval(syncBuyerRoles, SYNC_MINUTES * 60 * 1000).unref();
   setInterval(syncPurchaseLogs, PURCHASE_SYNC_SECONDS * 1000).unref();
   setInterval(syncLicenseEventLogs, PURCHASE_SYNC_SECONDS * 1000).unref();
   setInterval(syncContentCreatorLicenses, SYNC_MINUTES * 60 * 1000).unref();
   setInterval(syncSignedPlayerLicenses, SYNC_MINUTES * 60 * 1000).unref();
+  setInterval(syncSitePresence, 60 * 1000).unref();
   setInterval(expirePendingBets, 60 * 1000).unref();
 });
 
