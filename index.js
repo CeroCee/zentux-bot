@@ -67,7 +67,8 @@ const COLORS = {
   primary: 0x7c3aed,
   success: 0x22c55e,
   danger: 0xef4444,
-  store: 0xf5b800
+  store: 0xf5b800,
+  giveaway: 0x38bdf8
 };
 
 const licenseApi = createLicenseApi({
@@ -164,6 +165,184 @@ function brandEmbed({ color = COLORS.primary, title, description }) {
     .setDescription(description)
     .setFooter({ text: 'Zentux | Licencias seguras y soporte oficial' })
     .setTimestamp();
+}
+
+function parseGiveawayDuration(input) {
+  const value = String(input || '').trim().toLowerCase();
+  const match = value.match(/^(\d+)\s*(s|sec|secs|seg|m|min|mins|h|hr|hrs|d|day|days|w|week|weeks)$/i);
+  if (!match) {
+    const error = new Error('Duracion invalida. Usa ejemplos como `10m`, `2h`, `1d` o `1w`.');
+    error.code = 'INVALID_GIVEAWAY_DURATION';
+    throw error;
+  }
+
+  const amount = Number.parseInt(match[1], 10);
+  const unit = match[2].toLowerCase();
+  const multipliers = {
+    s: 1000,
+    sec: 1000,
+    secs: 1000,
+    seg: 1000,
+    m: 60 * 1000,
+    min: 60 * 1000,
+    mins: 60 * 1000,
+    h: 60 * 60 * 1000,
+    hr: 60 * 60 * 1000,
+    hrs: 60 * 60 * 1000,
+    d: 24 * 60 * 60 * 1000,
+    day: 24 * 60 * 60 * 1000,
+    days: 24 * 60 * 60 * 1000,
+    w: 7 * 24 * 60 * 60 * 1000,
+    week: 7 * 24 * 60 * 60 * 1000,
+    weeks: 7 * 24 * 60 * 60 * 1000
+  };
+
+  const durationMs = amount * multipliers[unit];
+  if (!Number.isSafeInteger(durationMs) || durationMs < 10 * 1000 || durationMs > 30 * 24 * 60 * 60 * 1000) {
+    const error = new Error('La duracion debe estar entre 10 segundos y 30 dias.');
+    error.code = 'INVALID_GIVEAWAY_DURATION';
+    throw error;
+  }
+  return durationMs;
+}
+
+function extractMessageId(value) {
+  const matches = String(value || '').match(/\d{17,20}/g);
+  return matches?.at(-1) || null;
+}
+
+function giveawayTimestamp(ms, style = 'R') {
+  return `<t:${Math.floor(Number(ms) / 1000)}:${style}>`;
+}
+
+function formatGiveawayWinners(winnerIds) {
+  if (!winnerIds?.length) return 'Sin ganadores';
+  return winnerIds.map((userId) => `<@${userId}>`).join(', ');
+}
+
+function buildGiveawayComponents(giveaway, entryCount = 0) {
+  const active = giveaway.status === 'active' && giveaway.endsAt > Date.now();
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`giveaway:join:${giveaway.id}`)
+      .setEmoji('🎉')
+      .setLabel(active ? 'Participar' : 'Giveaway terminado')
+      .setStyle(ButtonStyle.Primary)
+      .setDisabled(!active),
+    new ButtonBuilder()
+      .setCustomId(`giveaway:count:${giveaway.id}`)
+      .setEmoji('👥')
+      .setLabel(`${entryCount} participantes`)
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(true)
+  );
+  return [row];
+}
+
+function buildGiveawayEmbed(giveaway, entryCount = 0) {
+  const active = giveaway.status === 'active' && giveaway.endsAt > Date.now();
+  const winnerText = active ? 'Pendiente' : formatGiveawayWinners(giveaway.winners);
+  const description = [
+    giveaway.description || null,
+    '',
+    `Click en **🎉 Participar** para entrar.`,
+    `**Ganadores:** ${giveaway.winnerCount}`,
+    `**Hosted by:** <@${giveaway.hostId}>`,
+    active
+      ? `**Termina:** ${giveawayTimestamp(giveaway.endsAt, 'R')} (${giveawayTimestamp(giveaway.endsAt, 'f')})`
+      : `**Estado:** ${giveaway.status === 'cancelled' ? 'Cancelado' : 'Finalizado'}`,
+    `**Participantes:** ${entryCount}`,
+    active ? null : `**Ganador(es):** ${winnerText}`
+  ].filter(Boolean).join('\n');
+
+  return brandEmbed({
+    color: active ? COLORS.giveaway : giveaway.status === 'cancelled' ? COLORS.danger : COLORS.success,
+    title: active ? `🎉 ${giveaway.prize}` : `🏆 Giveaway terminado: ${giveaway.prize}`,
+    description
+  });
+}
+
+function buildGiveawayResultEmbed(giveaway, winnerIds, reroll = false) {
+  const hasWinners = winnerIds.length > 0;
+  return brandEmbed({
+    color: hasWinners ? COLORS.success : COLORS.danger,
+    title: hasWinners
+      ? reroll ? '🎉 Nuevos ganadores del giveaway' : '🎉 Congratulations!'
+      : '😢 Giveaway sin ganadores',
+    description: hasWinners
+      ? [
+        `${formatGiveawayWinners(winnerIds)} ganaron el giveaway de **${giveaway.prize}**.`,
+        '',
+        `Hosted by: <@${giveaway.hostId}>`,
+        `Giveaway ID: \`${giveaway.id}\``
+      ].join('\n')
+      : `El giveaway de **${giveaway.prize}** terminó sin participantes suficientes.`
+  });
+}
+
+function pickGiveawayWinners(entries, winnerCount) {
+  const shuffled = [...entries];
+  for (let i = shuffled.length - 1; i > 0; i -= 1) {
+    const j = crypto.randomInt(i + 1);
+    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+  }
+  return shuffled.slice(0, Math.min(winnerCount, shuffled.length)).map((entry) => entry.userId);
+}
+
+async function fetchGiveawayMessage(giveaway) {
+  const channel = await client.channels.fetch(giveaway.channelId).catch(() => null);
+  if (!channel?.isTextBased()) return { channel: null, message: null };
+  const message = giveaway.messageId
+    ? await channel.messages.fetch(giveaway.messageId).catch(() => null)
+    : null;
+  return { channel, message };
+}
+
+async function finishGiveaway(giveaway, { reroll = false, silent = false } = {}) {
+  const entries = database.listGiveawayEntries(giveaway.id);
+  const winnerIds = pickGiveawayWinners(entries, giveaway.winnerCount);
+  const updatedGiveaway = reroll
+    ? database.setGiveawayWinners(giveaway.id, winnerIds)
+    : database.finishGiveaway(giveaway.id, winnerIds);
+  const entryCount = database.countGiveawayEntries(giveaway.id);
+  const { channel, message } = await fetchGiveawayMessage(updatedGiveaway);
+
+  if (message) {
+    await message.edit({
+      embeds: [buildGiveawayEmbed(updatedGiveaway, entryCount)],
+      components: buildGiveawayComponents(updatedGiveaway, entryCount)
+    }).catch(() => null);
+  }
+
+  if (!silent && channel) {
+    const components = message
+      ? [new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setLabel('Giveaway Message')
+          .setStyle(ButtonStyle.Link)
+          .setURL(message.url)
+      )]
+      : [];
+    await channel.send({
+      content: winnerIds.length ? `${formatGiveawayWinners(winnerIds)}` : undefined,
+      embeds: [buildGiveawayResultEmbed(updatedGiveaway, winnerIds, reroll)],
+      components
+    }).catch(() => null);
+  }
+
+  return updatedGiveaway;
+}
+
+async function finishExpiredGiveaways() {
+  const now = Date.now();
+  const expired = database.listActiveGiveaways().filter((giveaway) => giveaway.endsAt <= now);
+  for (const giveaway of expired) {
+    try {
+      await finishGiveaway(giveaway);
+    } catch (error) {
+      console.error(`No se pudo finalizar giveaway ${giveaway.id}:`, error.message);
+    }
+  }
 }
 
 function getRedeemCooldown(userId) {
@@ -978,6 +1157,138 @@ async function handleLogs(interaction) {
   if (type === 'generation') await syncLicenseEventLogs();
 }
 
+async function handleGiveawayCommand(interaction) {
+  if (!interaction.inGuild() || interaction.guildId !== GUILD_ID) {
+    return interaction.reply({ content: 'Este comando solo funciona en el servidor oficial de Zentux.', flags: EPHEMERAL });
+  }
+  if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
+    return interaction.reply({ content: 'Necesitas Administrador para usar giveaways.', flags: EPHEMERAL });
+  }
+
+  const subcommand = interaction.options.getSubcommand(true);
+
+  if (subcommand === 'start') {
+    const prize = interaction.options.getString('premio', true);
+    const durationInput = interaction.options.getString('duracion', true);
+    const winnerCount = interaction.options.getInteger('ganadores', true);
+    const channel = interaction.options.getChannel('canal') || interaction.channel;
+    const description = interaction.options.getString('descripcion') || '';
+
+    if (!channel?.isTextBased()) {
+      return interaction.reply({ content: 'El canal del giveaway debe ser un canal de texto.', flags: EPHEMERAL });
+    }
+
+    await interaction.deferReply({ flags: EPHEMERAL });
+    const durationMs = parseGiveawayDuration(durationInput);
+    const giveaway = database.createGiveaway({
+      id: crypto.randomBytes(6).toString('hex'),
+      guildId: interaction.guildId,
+      channelId: channel.id,
+      hostId: interaction.user.id,
+      prize,
+      description,
+      winnerCount,
+      endsAt: Date.now() + durationMs
+    });
+    const entryCount = database.countGiveawayEntries(giveaway.id);
+    const message = await channel.send({
+      embeds: [buildGiveawayEmbed(giveaway, entryCount)],
+      components: buildGiveawayComponents(giveaway, entryCount)
+    });
+    const savedGiveaway = database.updateGiveawayMessageId(giveaway.id, message.id);
+    await message.edit({
+      embeds: [buildGiveawayEmbed(savedGiveaway, entryCount)],
+      components: buildGiveawayComponents(savedGiveaway, entryCount)
+    }).catch(() => null);
+
+    return interaction.editReply({
+      content: `Giveaway creado en ${channel}: ${message.url}`
+    });
+  }
+
+  const messageId = extractMessageId(interaction.options.getString('mensaje', true));
+  if (!messageId) {
+    return interaction.reply({ content: 'No pude detectar un ID de mensaje valido.', flags: EPHEMERAL });
+  }
+  const giveaway = database.getGiveawayByMessageId(messageId);
+  if (!giveaway) {
+    return interaction.reply({ content: 'No encontre un giveaway con ese mensaje.', flags: EPHEMERAL });
+  }
+
+  await interaction.deferReply({ flags: EPHEMERAL });
+
+  if (subcommand === 'end') {
+    if (giveaway.status !== 'active') {
+      return interaction.editReply({ content: 'Ese giveaway ya no esta activo.' });
+    }
+    await finishGiveaway(giveaway);
+    return interaction.editReply({ content: 'Giveaway finalizado y ganadores anunciados.' });
+  }
+
+  if (subcommand === 'reroll') {
+    if (giveaway.status === 'active') {
+      return interaction.editReply({ content: 'Ese giveaway sigue activo. Finalizalo antes de hacer reroll.' });
+    }
+    const entries = database.listGiveawayEntries(giveaway.id);
+    if (entries.length === 0) {
+      return interaction.editReply({ content: 'No hay participantes para hacer reroll.' });
+    }
+    await finishGiveaway(giveaway, { reroll: true });
+    return interaction.editReply({ content: 'Reroll completado y anunciado.' });
+  }
+
+  if (subcommand === 'cancel') {
+    if (giveaway.status !== 'active') {
+      return interaction.editReply({ content: 'Ese giveaway ya no esta activo.' });
+    }
+    const cancelled = database.cancelGiveaway(giveaway.id);
+    const entryCount = database.countGiveawayEntries(giveaway.id);
+    const { message } = await fetchGiveawayMessage(cancelled);
+    if (message) {
+      await message.edit({
+        embeds: [buildGiveawayEmbed(cancelled, entryCount)],
+        components: buildGiveawayComponents(cancelled, entryCount)
+      }).catch(() => null);
+    }
+    return interaction.editReply({ content: 'Giveaway cancelado.' });
+  }
+
+  return interaction.editReply({ content: 'Subcomando de giveaway no reconocido.' });
+}
+
+async function handleGiveawayButton(interaction) {
+  const [, action, giveawayId] = interaction.customId.split(':');
+  if (action === 'count') {
+    return interaction.reply({ content: 'Ese boton solo muestra la cantidad de participantes.', flags: EPHEMERAL });
+  }
+  if (action !== 'join') return;
+  if (!interaction.inGuild() || interaction.guildId !== GUILD_ID) {
+    return interaction.reply({ content: 'Este giveaway solo funciona en el servidor oficial de Zentux.', flags: EPHEMERAL });
+  }
+
+  const giveaway = database.getGiveawayById(giveawayId);
+  if (!giveaway) {
+    return interaction.reply({ content: 'Este giveaway ya no existe.', flags: EPHEMERAL });
+  }
+  if (giveaway.status !== 'active' || giveaway.endsAt <= Date.now()) {
+    return interaction.reply({ content: 'Este giveaway ya termino.', flags: EPHEMERAL });
+  }
+  if (interaction.user.bot) {
+    return interaction.reply({ content: 'Los bots no pueden participar.', flags: EPHEMERAL });
+  }
+
+  const result = database.addGiveawayEntry(giveaway.id, interaction.user.id);
+  if (!result.inserted) {
+    return interaction.reply({ content: 'Ya estas participando en este giveaway. 🎉', flags: EPHEMERAL });
+  }
+
+  await interaction.reply({ content: `Listo, entraste al giveaway de **${giveaway.prize}**. Buena suerte. 🎉`, flags: EPHEMERAL });
+  await interaction.message.edit({
+    embeds: [buildGiveawayEmbed(giveaway, result.count)],
+    components: buildGiveawayComponents(giveaway, result.count)
+  }).catch(() => null);
+}
+
 async function syncLicenseEventLogs() {
   if (licenseEventSyncRunning) return;
   licenseEventSyncRunning = true;
@@ -1290,6 +1601,7 @@ client.once(Events.ClientReady, async (readyClient) => {
   await syncSignedPlayerLicenses();
   await syncSitePresence();
   await expirePendingBets();
+  await finishExpiredGiveaways();
   setInterval(syncBuyerRoles, SYNC_MINUTES * 60 * 1000).unref();
   setInterval(syncPurchaseLogs, PURCHASE_SYNC_SECONDS * 1000).unref();
   setInterval(syncLicenseEventLogs, PURCHASE_SYNC_SECONDS * 1000).unref();
@@ -1297,6 +1609,7 @@ client.once(Events.ClientReady, async (readyClient) => {
   setInterval(syncSignedPlayerLicenses, SYNC_MINUTES * 60 * 1000).unref();
   setInterval(syncSitePresence, 60 * 1000).unref();
   setInterval(expirePendingBets, 60 * 1000).unref();
+  setInterval(finishExpiredGiveaways, 30 * 1000).unref();
 });
 
 client.on(Events.GuildMemberUpdate, (oldMember, newMember) => {
@@ -1307,6 +1620,9 @@ client.on(Events.GuildMemberUpdate, (oldMember, newMember) => {
 
 client.on(Events.InteractionCreate, async (interaction) => {
   try {
+    if (interaction.isButton() && interaction.customId.startsWith('giveaway:')) {
+      return await handleGiveawayButton(interaction);
+    }
     if (interaction.isButton() && interaction.customId.startsWith('release_')) {
       return await handleReleaseButton(interaction);
     }
@@ -1338,6 +1654,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       if (interaction.commandName === 'generar') return await handleGenerate(interaction);
       if (interaction.commandName === 'signed-player') return await handleGenerate(interaction);
       if (interaction.commandName === 'generar-giveaway') return await handleGenerate(interaction);
+      if (interaction.commandName === 'giveaway') return await handleGiveawayCommand(interaction);
       if (interaction.commandName === 'logs') return await handleLogs(interaction);
       if (interaction.commandName === 'borrar') return await handleDeleteCommand(interaction);
     }

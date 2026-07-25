@@ -74,6 +74,30 @@ db.exec(`
     awarded_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
 
+  CREATE TABLE IF NOT EXISTS giveaways (
+    id TEXT PRIMARY KEY,
+    guildId TEXT NOT NULL,
+    channelId TEXT NOT NULL,
+    messageId TEXT,
+    prize TEXT NOT NULL,
+    description TEXT,
+    winnerCount INTEGER NOT NULL DEFAULT 1,
+    hostId TEXT NOT NULL,
+    endsAt INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active',
+    winnersJson TEXT NOT NULL DEFAULT '[]',
+    createdAt INTEGER NOT NULL,
+    endedAt INTEGER
+  );
+
+  CREATE TABLE IF NOT EXISTS giveaway_entries (
+    giveawayId TEXT NOT NULL,
+    userId TEXT NOT NULL,
+    joinedAt INTEGER NOT NULL,
+    PRIMARY KEY (giveawayId, userId),
+    FOREIGN KEY (giveawayId) REFERENCES giveaways(id) ON DELETE CASCADE
+  );
+
   CREATE INDEX IF NOT EXISTS idx_quests_user_date
   ON quests (userId, date);
 
@@ -88,6 +112,15 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_xp_logs_user
   ON xp_logs (userId);
+
+  CREATE INDEX IF NOT EXISTS idx_giveaways_status_ends
+  ON giveaways (status, endsAt);
+
+  CREATE INDEX IF NOT EXISTS idx_giveaways_message
+  ON giveaways (messageId);
+
+  CREATE INDEX IF NOT EXISTS idx_giveaway_entries_giveaway
+  ON giveaway_entries (giveawayId);
 `);
 
 const requiredUserColumns = {
@@ -226,6 +259,82 @@ const queries = {
     WHERE userId = ?
     ORDER BY id DESC
     LIMIT ?
+  `),
+
+  createGiveaway: db.prepare(`
+    INSERT INTO giveaways (
+      id, guildId, channelId, messageId, prize, description,
+      winnerCount, hostId, endsAt, status, winnersJson, createdAt
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', '[]', ?)
+  `),
+
+  updateGiveawayMessageId: db.prepare(`
+    UPDATE giveaways
+    SET messageId = ?
+    WHERE id = ?
+  `),
+
+  getGiveawayById: db.prepare(`
+    SELECT *
+    FROM giveaways
+    WHERE id = ?
+  `),
+
+  getGiveawayByMessageId: db.prepare(`
+    SELECT *
+    FROM giveaways
+    WHERE messageId = ?
+    ORDER BY createdAt DESC
+    LIMIT 1
+  `),
+
+  listActiveGiveaways: db.prepare(`
+    SELECT *
+    FROM giveaways
+    WHERE status = 'active'
+    ORDER BY endsAt ASC
+  `),
+
+  addGiveawayEntry: db.prepare(`
+    INSERT INTO giveaway_entries (giveawayId, userId, joinedAt)
+    VALUES (?, ?, ?)
+    ON CONFLICT(giveawayId, userId) DO NOTHING
+  `),
+
+  countGiveawayEntries: db.prepare(`
+    SELECT COUNT(*) AS count
+    FROM giveaway_entries
+    WHERE giveawayId = ?
+  `),
+
+  listGiveawayEntries: db.prepare(`
+    SELECT userId, joinedAt
+    FROM giveaway_entries
+    WHERE giveawayId = ?
+    ORDER BY joinedAt ASC
+  `),
+
+  finishGiveaway: db.prepare(`
+    UPDATE giveaways
+    SET status = 'ended',
+      winnersJson = ?,
+      endedAt = ?
+    WHERE id = ? AND status = 'active'
+  `),
+
+  setGiveawayWinners: db.prepare(`
+    UPDATE giveaways
+    SET winnersJson = ?,
+      endedAt = ?
+    WHERE id = ?
+  `),
+
+  cancelGiveaway: db.prepare(`
+    UPDATE giveaways
+    SET status = 'cancelled',
+      endedAt = ?
+    WHERE id = ? AND status = 'active'
   `)
 };
 
@@ -532,6 +641,115 @@ function getCoinLogs(userId, limit = 25) {
   return queries.getCoinLogs.all(normalizedUserId, normalizedLimit);
 }
 
+function normalizeGiveawayId(giveawayId) {
+  const normalizedId = String(giveawayId || '').trim();
+  if (!normalizedId) throw new TypeError('giveawayId es obligatorio.');
+  return normalizedId;
+}
+
+function hydrateGiveaway(row) {
+  if (!row) return null;
+  let winners = [];
+  try {
+    winners = JSON.parse(row.winnersJson || '[]');
+  } catch {
+    winners = [];
+  }
+  return {
+    ...row,
+    winnerCount: Number(row.winnerCount),
+    endsAt: Number(row.endsAt),
+    createdAt: Number(row.createdAt),
+    endedAt: row.endedAt === null ? null : Number(row.endedAt),
+    winners
+  };
+}
+
+function createGiveaway(giveaway) {
+  const id = normalizeGiveawayId(giveaway.id);
+  const guildId = validateUserId(giveaway.guildId);
+  const channelId = validateUserId(giveaway.channelId);
+  const hostId = validateUserId(giveaway.hostId);
+  const prize = String(giveaway.prize || '').trim();
+  if (!prize) throw new TypeError('prize es obligatorio.');
+  const description = String(giveaway.description || '').trim() || null;
+  const winnerCount = Math.min(Math.max(Number.parseInt(giveaway.winnerCount, 10) || 1, 1), 50);
+  const endsAt = Number.parseInt(giveaway.endsAt, 10);
+  if (!Number.isSafeInteger(endsAt) || endsAt <= Date.now()) {
+    throw new TypeError('endsAt debe ser una fecha futura en milisegundos.');
+  }
+  const createdAt = Number.parseInt(giveaway.createdAt, 10) || Date.now();
+
+  queries.createGiveaway.run(
+    id,
+    guildId,
+    channelId,
+    giveaway.messageId ? String(giveaway.messageId) : null,
+    prize,
+    description,
+    winnerCount,
+    hostId,
+    endsAt,
+    createdAt
+  );
+  return getGiveawayById(id);
+}
+
+function updateGiveawayMessageId(giveawayId, messageId) {
+  const normalizedId = normalizeGiveawayId(giveawayId);
+  const normalizedMessageId = validateUserId(messageId);
+  queries.updateGiveawayMessageId.run(normalizedMessageId, normalizedId);
+  return getGiveawayById(normalizedId);
+}
+
+function getGiveawayById(giveawayId) {
+  return hydrateGiveaway(queries.getGiveawayById.get(normalizeGiveawayId(giveawayId)));
+}
+
+function getGiveawayByMessageId(messageId) {
+  return hydrateGiveaway(queries.getGiveawayByMessageId.get(validateUserId(messageId)));
+}
+
+function listActiveGiveaways() {
+  return queries.listActiveGiveaways.all().map(hydrateGiveaway);
+}
+
+function addGiveawayEntry(giveawayId, userId) {
+  const normalizedGiveawayId = normalizeGiveawayId(giveawayId);
+  const normalizedUserId = validateUserId(userId);
+  const result = queries.addGiveawayEntry.run(normalizedGiveawayId, normalizedUserId, Date.now());
+  return {
+    inserted: result.changes === 1,
+    count: countGiveawayEntries(normalizedGiveawayId)
+  };
+}
+
+function countGiveawayEntries(giveawayId) {
+  return Number(queries.countGiveawayEntries.get(normalizeGiveawayId(giveawayId))?.count || 0);
+}
+
+function listGiveawayEntries(giveawayId) {
+  return queries.listGiveawayEntries.all(normalizeGiveawayId(giveawayId));
+}
+
+function finishGiveaway(giveawayId, winners = []) {
+  const normalizedId = normalizeGiveawayId(giveawayId);
+  queries.finishGiveaway.run(JSON.stringify(winners), Date.now(), normalizedId);
+  return getGiveawayById(normalizedId);
+}
+
+function setGiveawayWinners(giveawayId, winners = []) {
+  const normalizedId = normalizeGiveawayId(giveawayId);
+  queries.setGiveawayWinners.run(JSON.stringify(winners), Date.now(), normalizedId);
+  return getGiveawayById(normalizedId);
+}
+
+function cancelGiveaway(giveawayId) {
+  const normalizedId = normalizeGiveawayId(giveawayId);
+  queries.cancelGiveaway.run(Date.now(), normalizedId);
+  return getGiveawayById(normalizedId);
+}
+
 function listUsersForMigration() {
   return db.prepare('SELECT userId, zcoins, bank FROM users').all();
 }
@@ -567,6 +785,17 @@ module.exports = {
   xpForNextLevel,
   registerCoinLog,
   getCoinLogs,
+  createGiveaway,
+  updateGiveawayMessageId,
+  getGiveawayById,
+  getGiveawayByMessageId,
+  listActiveGiveaways,
+  addGiveawayEntry,
+  countGiveawayEntries,
+  listGiveawayEntries,
+  finishGiveaway,
+  setGiveawayWinners,
+  cancelGiveaway,
   listUsersForMigration,
   closeDatabase
 };

@@ -176,6 +176,87 @@ const commands = [
         .setMaxValue(25)
         .setRequired(true)
     ),
+  new SlashCommandBuilder()
+    .setName('giveaway')
+    .setDescription('Crea y administra giveaways con boton de participacion')
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+    .setDMPermission(false)
+    .addSubcommand((subcommand) =>
+      subcommand
+        .setName('start')
+        .setDescription('Crea un giveaway con boton para participar')
+        .addStringOption((option) =>
+          option
+            .setName('premio')
+            .setDescription('Premio del giveaway, ejemplo: 500 Robux o 1 key de 7 dias')
+            .setRequired(true)
+            .setMinLength(1)
+            .setMaxLength(200)
+        )
+        .addStringOption((option) =>
+          option
+            .setName('duracion')
+            .setDescription('Duracion: 10m, 2h, 1d, 1w')
+            .setRequired(true)
+            .setMinLength(2)
+            .setMaxLength(20)
+        )
+        .addIntegerOption((option) =>
+          option
+            .setName('ganadores')
+            .setDescription('Cantidad de ganadores')
+            .setRequired(true)
+            .setMinValue(1)
+            .setMaxValue(25)
+        )
+        .addChannelOption((option) =>
+          option
+            .setName('canal')
+            .setDescription('Canal donde se publicara el giveaway')
+            .addChannelTypes(ChannelType.GuildText)
+            .setRequired(false)
+        )
+        .addStringOption((option) =>
+          option
+            .setName('descripcion')
+            .setDescription('Texto opcional que aparecera debajo del premio')
+            .setRequired(false)
+            .setMaxLength(500)
+        )
+    )
+    .addSubcommand((subcommand) =>
+      subcommand
+        .setName('end')
+        .setDescription('Finaliza un giveaway inmediatamente')
+        .addStringOption((option) =>
+          option
+            .setName('mensaje')
+            .setDescription('ID del mensaje del giveaway')
+            .setRequired(true)
+        )
+    )
+    .addSubcommand((subcommand) =>
+      subcommand
+        .setName('reroll')
+        .setDescription('Elige nuevos ganadores de un giveaway terminado')
+        .addStringOption((option) =>
+          option
+            .setName('mensaje')
+            .setDescription('ID del mensaje del giveaway')
+            .setRequired(true)
+        )
+    )
+    .addSubcommand((subcommand) =>
+      subcommand
+        .setName('cancel')
+        .setDescription('Cancela un giveaway activo sin elegir ganadores')
+        .addStringOption((option) =>
+          option
+            .setName('mensaje')
+            .setDescription('ID del mensaje del giveaway')
+            .setRequired(true)
+        )
+    ),
   ...economyCommandModules.map((command) => command.data)
 ];
 
