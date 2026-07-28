@@ -8,7 +8,7 @@ const PRODUCT_DEFINITIONS = [
   {
     id: 'zentux-v7',
     name: 'Zentux v7',
-    emoji: '🖱️',
+    icon: 'Mouse',
     color: 0xef4444,
     assetPattern: /zentux[._ -]?v7.*\.exe$/i,
     noteHeadings: ['zentux v7', 'v7', 'autoclicker']
@@ -16,7 +16,7 @@ const PRODUCT_DEFINITIONS = [
   {
     id: 'zentux-optimizer',
     name: 'Zentux Optimizer',
-    emoji: '⚡',
+    icon: 'Optimizer',
     color: 0xec4899,
     assetPattern: /zentux[._ -]?optimizer.*\.exe$/i,
     noteHeadings: ['zentux optimizer', 'optimizer', 'optimizador']
@@ -83,11 +83,11 @@ async function fetchLatestRelease(repository) {
 
   const response = await fetch(`${GITHUB_API_BASE}/repos/${repository}/releases/latest`, { headers });
   if (response.status === 404) {
-    throw new Error(`No se encontró un latest release en ${repository}.`);
+    throw new Error(`No se encontro un latest release en ${repository}.`);
   }
   if (!response.ok) {
     const details = await response.text().catch(() => '');
-    throw new Error(`GitHub respondió ${response.status}: ${details.slice(0, 200)}`);
+    throw new Error(`GitHub respondio ${response.status}: ${details.slice(0, 200)}`);
   }
 
   return response.json();
@@ -118,10 +118,37 @@ function normalizeHeading(value) {
     .trim();
 }
 
+function isGenericReleaseLine(line) {
+  const normalized = normalizeHeading(String(line || '').replace(/^[-*]\s+/, ''));
+  if (!normalized) return true;
+  return [
+    'initial public release for zentux apps',
+    'included',
+    'zentuxoptimizer pro',
+    'zentux optimizer pro',
+    'zentux autoclicker',
+    'one active zentux license unlocks all supported zentux products'
+  ].some((genericLine) => normalized === genericLine);
+}
+
+function cleanReleaseNotes(notes) {
+  const usefulLines = String(notes || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => !isGenericReleaseLine(line));
+
+  const cleaned = usefulLines.join('\n').trim();
+  if (!cleaned) {
+    return 'No hay notas detalladas publicadas para esta actualizacion todavia. Abre la app y entra en **Actualizaciones** para instalar el build mas reciente.';
+  }
+
+  return cleaned.slice(0, 1000);
+}
+
 function extractProductNotes(releaseBody, product) {
   const body = String(releaseBody || '').trim();
   if (!body) {
-    return 'Abre la app y entra en **Actualizaciones** para instalar esta nueva versión desde el updater interno.';
+    return 'Abre la app y entra en **Actualizaciones** para instalar esta nueva version desde el updater interno.';
   }
 
   const lines = body.split(/\r?\n/);
@@ -145,10 +172,10 @@ function extractProductNotes(releaseBody, product) {
       .slice(matchedHeading.index + 1, nextHeading ? nextHeading.index : undefined)
       .join('\n')
       .trim();
-    if (section) return section.slice(0, 1000);
+    if (section) return cleanReleaseNotes(section);
   }
 
-  return body.slice(0, 1000);
+  return cleanReleaseNotes(body);
 }
 
 function buildReleaseEmbed({ product, release, asset }) {
@@ -158,22 +185,22 @@ function buildReleaseEmbed({ product, release, asset }) {
 
   return new EmbedBuilder()
     .setColor(product.color)
-    .setTitle(`${product.emoji} Nueva actualización de ${product.name}`)
+    .setTitle(`${product.icon} | Nueva actualizacion de ${product.name}`)
     .setDescription(
       [
-        `Ya está disponible una nueva actualización de **${product.name}**.`,
+        `Ya esta disponible una nueva actualizacion de **${product.name}**.`,
         'Puedes instalarla directamente desde el panel de **Actualizaciones** dentro de la app.',
         '',
-        `**Versión:** \`${release.tag_name || release.name || 'latest'}\``,
+        `**Version:** \`${release.tag_name || release.name || 'latest'}\``,
         `**Build detectado:** \`${asset.name}\``,
-        updatedAtTimestamp ? `**Último build:** <t:${updatedAtTimestamp}:R>` : null
+        updatedAtTimestamp ? `**Ultimo build:** <t:${updatedAtTimestamp}:R>` : null
       ].filter(Boolean).join('\n')
     )
     .addFields({
       name: 'Mejoras y cambios',
       value: notes
     })
-    .setFooter({ text: 'Zentux Updates • Actualiza desde la app oficial' })
+    .setFooter({ text: 'Zentux Updates | Actualiza desde la app oficial' })
     .setTimestamp(new Date());
 }
 
