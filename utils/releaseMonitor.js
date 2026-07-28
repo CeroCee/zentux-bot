@@ -63,8 +63,13 @@ function getReleaseConfig(config = {}) {
       || releaseConfig.announceLatestOnBoot
       || 'false'
   ).toLowerCase() === 'true';
+  const announcementBatchId = String(
+    process.env.UPDATE_ANNOUNCEMENT_BATCH_ID
+      || releaseConfig.announcementBatchId
+      || 'default'
+  ).trim() || 'default';
 
-  return { enabled, repository, channelId, checkMinutes, announceLatestOnBoot };
+  return { enabled, repository, channelId, checkMinutes, announceLatestOnBoot, announcementBatchId };
 }
 
 async function fetchLatestRelease(repository) {
@@ -147,7 +152,8 @@ function extractProductNotes(releaseBody, product) {
 }
 
 function buildReleaseEmbed({ product, release, asset }) {
-  const publishedAt = release.published_at ? Math.floor(new Date(release.published_at).getTime() / 1000) : null;
+  const updatedAt = asset.updated_at || release.published_at;
+  const updatedAtTimestamp = updatedAt ? Math.floor(new Date(updatedAt).getTime() / 1000) : null;
   const notes = extractProductNotes(release.body, product);
 
   return new EmbedBuilder()
@@ -160,7 +166,7 @@ function buildReleaseEmbed({ product, release, asset }) {
         '',
         `**Versión:** \`${release.tag_name || release.name || 'latest'}\``,
         `**Build detectado:** \`${asset.name}\``,
-        publishedAt ? `**Publicado:** <t:${publishedAt}:R>` : null
+        updatedAtTimestamp ? `**Último build:** <t:${updatedAtTimestamp}:R>` : null
       ].filter(Boolean).join('\n')
     )
     .addFields({
@@ -236,7 +242,7 @@ async function announceLatestReleaseOnce(client, { config, database } = {}) {
 
     tracked += 1;
     const fingerprint = buildFingerprint(release, asset);
-    const manualKey = `release_monitor:manual:${releaseConfig.repository}:${releaseConfig.channelId}:${product.id}`;
+    const manualKey = `release_monitor:manual:${releaseConfig.announcementBatchId}:${releaseConfig.repository}:${releaseConfig.channelId}:${product.id}`;
     const regularKey = `release_monitor:${releaseConfig.repository}:${product.id}`;
     const previousManualFingerprint = database.getSetting(manualKey);
 

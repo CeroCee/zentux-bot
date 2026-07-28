@@ -7,7 +7,8 @@
     "enabled": true,
     "repository": "CeroCee/CeroCee-zentuxoptimizer-releases",
     "checkMinutes": 10,
-    "announceLatestOnBoot": true
+    "announceLatestOnBoot": true,
+    "announcementBatchId": "latest-v7-optimizer-2026-07-28"
   },
   "reactionRewardsStartAt": "2026-07-02T00:00:00-04:00",
   "authorizedVoiceChannels": [
