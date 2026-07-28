@@ -21,6 +21,7 @@ const config = require('./config.json');
 const database = require('./database/db');
 const { commands, economyCommandModules } = require('./commands');
 const { createLicenseApi, LicenseApiError } = require('./license-api');
+const { startReleaseMonitor } = require('./utils/releaseMonitor');
 
 const requiredEnvironment = [
   'GUILD_ID',
@@ -1647,6 +1648,7 @@ client.once(Events.ClientReady, async (readyClient) => {
   setInterval(syncSitePresence, 60 * 1000).unref();
   setInterval(expirePendingBets, 60 * 1000).unref();
   setInterval(finishExpiredGiveaways, 30 * 1000).unref();
+  startReleaseMonitor(readyClient, { config, database });
 });
 
 client.on(Events.GuildMemberUpdate, (oldMember, newMember) => {
