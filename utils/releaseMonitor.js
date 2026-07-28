@@ -55,8 +55,13 @@ function getReleaseConfig(config = {}) {
       || releaseConfig.enabled
       || 'true'
   ).toLowerCase() !== 'false';
+  const announceLatestOnBoot = String(
+    process.env.UPDATE_ANNOUNCE_LATEST_ON_BOOT
+      || releaseConfig.announceLatestOnBoot
+      || 'false'
+  ).toLowerCase() === 'true';
 
-  return { enabled, repository, channelId, checkMinutes };
+  return { enabled, repository, channelId, checkMinutes, announceLatestOnBoot };
 }
 
 async function fetchLatestRelease(repository) {
@@ -187,6 +192,45 @@ async function checkReleaseUpdates(client, { config, database, silent = false } 
   return { checked: true, repository: releaseConfig.repository, tracked, announced };
 }
 
+async function announceLatestReleaseOnce(client, { config, database } = {}) {
+  const releaseConfig = getReleaseConfig(config);
+  if (!releaseConfig.enabled || !releaseConfig.announceLatestOnBoot) {
+    return { checked: false, reason: 'manual_announce_disabled' };
+  }
+  if (!releaseConfig.channelId) return { checked: false, reason: 'missing_channel' };
+
+  const release = await fetchLatestRelease(releaseConfig.repository);
+  const channel = await client.channels.fetch(releaseConfig.channelId).catch(() => null);
+  if (!channel?.isTextBased?.()) return { checked: false, reason: 'invalid_channel' };
+
+  let announced = 0;
+  let tracked = 0;
+
+  for (const product of PRODUCT_DEFINITIONS) {
+    const asset = findProductAsset(release, product);
+    if (!asset) continue;
+
+    tracked += 1;
+    const fingerprint = buildFingerprint(release, asset);
+    const manualKey = `release_monitor:manual:${releaseConfig.repository}:${releaseConfig.channelId}:${product.id}`;
+    const regularKey = `release_monitor:${releaseConfig.repository}:${product.id}`;
+    const previousManualFingerprint = database.getSetting(manualKey);
+
+    if (previousManualFingerprint === fingerprint) {
+      database.setSetting(regularKey, fingerprint);
+      continue;
+    }
+
+    const { embed, row } = buildReleaseEmbed({ product, release, asset });
+    await channel.send({ embeds: [embed], components: [row] });
+    database.setSetting(manualKey, fingerprint);
+    database.setSetting(regularKey, fingerprint);
+    announced += 1;
+  }
+
+  return { checked: true, repository: releaseConfig.repository, tracked, announced };
+}
+
 function startReleaseMonitor(client, { config, database }) {
   const releaseConfig = getReleaseConfig(config);
   if (!releaseConfig.enabled) {
@@ -212,6 +256,20 @@ function startReleaseMonitor(client, { config, database }) {
     });
   };
 
+  if (releaseConfig.announceLatestOnBoot) {
+    announceLatestReleaseOnce(client, { config, database }).then((result) => {
+      if (result.checked) {
+        console.log(
+          `Anuncio manual de updates: ${result.tracked} app(s) revisada(s), ${result.announced} anuncio(s).`
+        );
+      } else {
+        console.warn(`Anuncio manual de updates omitido: ${result.reason}.`);
+      }
+    }).catch((error) => {
+      console.error('No se pudo enviar el anuncio manual de updates:', error.message);
+    });
+  }
+
   runCheck(false);
   const timer = setInterval(runCheck, releaseConfig.checkMinutes * 60 * 1000);
   timer.unref();
@@ -222,6 +280,7 @@ function startReleaseMonitor(client, { config, database }) {
 }
 
 module.exports = {
+  announceLatestReleaseOnce,
   checkReleaseUpdates,
   startReleaseMonitor
 };
