@@ -1,22 +1,25 @@
-const { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } = require('discord.js');
+const { EmbedBuilder } = require('discord.js');
 
 const GITHUB_API_BASE = 'https://api.github.com';
 const DEFAULT_REPOSITORY = 'CeroCee/CeroCee-zentuxoptimizer-releases';
 const DEFAULT_CHECK_MINUTES = 10;
+
 const PRODUCT_DEFINITIONS = [
   {
     id: 'zentux-v7',
     name: 'Zentux v7',
     emoji: '🖱️',
     color: 0xef4444,
-    assetPattern: /zentux[._ -]?v7.*\.exe$/i
+    assetPattern: /zentux[._ -]?v7.*\.exe$/i,
+    noteHeadings: ['zentux v7', 'v7', 'autoclicker']
   },
   {
     id: 'zentux-optimizer',
     name: 'Zentux Optimizer',
     emoji: '⚡',
     color: 0xec4899,
-    assetPattern: /zentux[._ -]?optimizer.*\.exe$/i
+    assetPattern: /zentux[._ -]?optimizer.*\.exe$/i,
+    noteHeadings: ['zentux optimizer', 'optimizer', 'optimizador']
   }
 ];
 
@@ -75,11 +78,11 @@ async function fetchLatestRelease(repository) {
 
   const response = await fetch(`${GITHUB_API_BASE}/repos/${repository}/releases/latest`, { headers });
   if (response.status === 404) {
-    throw new Error(`No se encontro un latest release en ${repository}.`);
+    throw new Error(`No se encontró un latest release en ${repository}.`);
   }
   if (!response.ok) {
     const details = await response.text().catch(() => '');
-    throw new Error(`GitHub respondio ${response.status}: ${details.slice(0, 200)}`);
+    throw new Error(`GitHub respondió ${response.status}: ${details.slice(0, 200)}`);
   }
 
   return response.json();
@@ -102,53 +105,75 @@ function buildFingerprint(release, asset) {
   ].map((part) => String(part || '')).join('|');
 }
 
-function formatFileSize(bytes) {
-  const size = Number(bytes);
-  if (!Number.isFinite(size) || size <= 0) return 'N/A';
-  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
-  return `${(size / 1024 / 1024).toFixed(1)} MB`;
+function normalizeHeading(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[*_`#>:-]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function extractProductNotes(releaseBody, product) {
+  const body = String(releaseBody || '').trim();
+  if (!body) {
+    return 'Abre la app y entra en **Actualizaciones** para instalar esta nueva versión desde el updater interno.';
+  }
+
+  const lines = body.split(/\r?\n/);
+  const headingIndexes = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (!/^\s{0,3}#{1,6}\s+/.test(line)) continue;
+    headingIndexes.push({
+      index,
+      heading: normalizeHeading(line.replace(/^\s{0,3}#{1,6}\s+/, ''))
+    });
+  }
+
+  const matchedHeading = headingIndexes.find((entry) => (
+    product.noteHeadings.some((heading) => entry.heading.includes(heading))
+  ));
+
+  if (matchedHeading) {
+    const nextHeading = headingIndexes.find((entry) => entry.index > matchedHeading.index);
+    const section = lines
+      .slice(matchedHeading.index + 1, nextHeading ? nextHeading.index : undefined)
+      .join('\n')
+      .trim();
+    if (section) return section.slice(0, 1000);
+  }
+
+  return body.slice(0, 1000);
 }
 
 function buildReleaseEmbed({ product, release, asset }) {
-  const releaseUrl = release.html_url || `https://github.com/${DEFAULT_REPOSITORY}/releases/latest`;
-  const downloadUrl = asset.browser_download_url || releaseUrl;
   const publishedAt = release.published_at ? Math.floor(new Date(release.published_at).getTime() / 1000) : null;
+  const notes = extractProductNotes(release.body, product);
 
-  const embed = new EmbedBuilder()
+  return new EmbedBuilder()
     .setColor(product.color)
     .setTitle(`${product.emoji} Nueva actualización de ${product.name}`)
     .setDescription(
       [
-        `Ya está disponible una nueva versión de **${product.name}**.`,
+        `Ya está disponible una nueva actualización de **${product.name}**.`,
+        'Puedes instalarla directamente desde el panel de **Actualizaciones** dentro de la app.',
         '',
         `**Versión:** \`${release.tag_name || release.name || 'latest'}\``,
-        `**Archivo:** \`${asset.name}\``,
-        `**Tamaño:** ${formatFileSize(asset.size)}`,
+        `**Build detectado:** \`${asset.name}\``,
         publishedAt ? `**Publicado:** <t:${publishedAt}:R>` : null
       ].filter(Boolean).join('\n')
     )
-    .setFooter({ text: 'Zentux Updates • Descarga siempre desde fuentes oficiales' })
+    .addFields({
+      name: 'Mejoras y cambios',
+      value: notes
+    })
+    .setFooter({ text: 'Zentux Updates • Actualiza desde la app oficial' })
     .setTimestamp(new Date());
+}
 
-  if (release.body) {
-    const notes = String(release.body).trim().slice(0, 900);
-    if (notes) embed.addFields({ name: 'Notas del release', value: notes });
-  }
-
-  const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setStyle(ButtonStyle.Link)
-      .setLabel('Descargar actualización')
-      .setEmoji('⬇️')
-      .setURL(downloadUrl),
-    new ButtonBuilder()
-      .setStyle(ButtonStyle.Link)
-      .setLabel('Ver release')
-      .setEmoji('🔗')
-      .setURL(releaseUrl)
-  );
-
-  return { embed, row };
+async function sendProductAnnouncement({ channel, product, release, asset }) {
+  const embed = buildReleaseEmbed({ product, release, asset });
+  await channel.send({ embeds: [embed] });
 }
 
 async function checkReleaseUpdates(client, { config, database, silent = false } = {}) {
@@ -184,8 +209,7 @@ async function checkReleaseUpdates(client, { config, database, silent = false } 
     database.setSetting(settingKey, fingerprint);
     if (silent) continue;
 
-    const { embed, row } = buildReleaseEmbed({ product, release, asset });
-    await channel.send({ embeds: [embed], components: [row] });
+    await sendProductAnnouncement({ channel, product, release, asset });
     announced += 1;
   }
 
@@ -221,8 +245,7 @@ async function announceLatestReleaseOnce(client, { config, database } = {}) {
       continue;
     }
 
-    const { embed, row } = buildReleaseEmbed({ product, release, asset });
-    await channel.send({ embeds: [embed], components: [row] });
+    await sendProductAnnouncement({ channel, product, release, asset });
     database.setSetting(manualKey, fingerprint);
     database.setSetting(regularKey, fingerprint);
     announced += 1;
