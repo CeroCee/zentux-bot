@@ -1,25 +1,27 @@
 const { EmbedBuilder } = require('discord.js');
 
 const GITHUB_API_BASE = 'https://api.github.com';
-const DEFAULT_REPOSITORY = 'CeroCee/CeroCee-zentuxoptimizer-releases';
 const DEFAULT_CHECK_MINUTES = 10;
+const DEFAULT_REPOSITORY = 'CeroCee/zentux-updates';
 
-const PRODUCT_DEFINITIONS = [
-  {
-    id: 'zentux-v7',
-    name: 'Zentux v7',
-    icon: 'Mouse',
-    color: 0xef4444,
-    assetPattern: /zentux[._ -]?v7.*\.exe$/i,
-    noteHeadings: ['zentux v7', 'v7', 'autoclicker']
-  },
+const DEFAULT_PRODUCTS = [
   {
     id: 'zentux-optimizer',
     name: 'Zentux Optimizer',
+    repository: 'CeroCee/zentux-updates',
     icon: 'Optimizer',
     color: 0xec4899,
-    assetPattern: /zentux[._ -]?optimizer.*\.exe$/i,
+    assetPattern: /zentuxoptimizer.*\.exe$/i,
     noteHeadings: ['zentux optimizer', 'optimizer', 'optimizador']
+  },
+  {
+    id: 'zentux-v7',
+    name: 'Zentux v7',
+    repository: 'CeroCee/zentux-releases1',
+    icon: 'v7',
+    color: 0xef4444,
+    assetPattern: /zentux[._ -]?v7.*\.exe$/i,
+    noteHeadings: ['zentux v7', 'v7', 'autoclicker']
   }
 ];
 
@@ -31,6 +33,17 @@ function normalizeRepository(value) {
   return raw.replace(/^\/+|\/+$/g, '').replace(/\.git$/i, '');
 }
 
+function buildAssetPattern(value, fallback) {
+  if (!value) return fallback;
+  if (value instanceof RegExp) return value;
+
+  try {
+    return new RegExp(String(value), 'i');
+  } catch {
+    return fallback;
+  }
+}
+
 function resolveAnnouncementChannelId(config) {
   return String(
     process.env.UPDATE_ANNOUNCEMENT_CHANNEL_ID
@@ -38,6 +51,37 @@ function resolveAnnouncementChannelId(config) {
       || config.announcementChannelId
       || ''
   ).trim();
+}
+
+function resolveProducts(releaseConfig = {}) {
+  const configuredProducts = Array.isArray(releaseConfig.products) && releaseConfig.products.length
+    ? releaseConfig.products
+    : DEFAULT_PRODUCTS;
+
+  return configuredProducts
+    .map((configuredProduct) => {
+      const defaultProduct = DEFAULT_PRODUCTS.find((product) => product.id === configuredProduct.id) || {};
+      const envRepositoryKey = configuredProduct.id === 'zentux-optimizer'
+        ? 'UPDATE_OPTIMIZER_REPOSITORY'
+        : configuredProduct.id === 'zentux-v7'
+          ? 'UPDATE_V7_REPOSITORY'
+          : '';
+
+      return {
+        ...defaultProduct,
+        ...configuredProduct,
+        repository: normalizeRepository(
+          (envRepositoryKey && process.env[envRepositoryKey])
+            || configuredProduct.repository
+            || defaultProduct.repository
+            || releaseConfig.repository
+            || DEFAULT_REPOSITORY
+        ),
+        assetPattern: buildAssetPattern(configuredProduct.assetPattern, defaultProduct.assetPattern || /.*/i),
+        noteHeadings: configuredProduct.noteHeadings || defaultProduct.noteHeadings || []
+      };
+    })
+    .filter((product) => product.id && product.name && product.repository);
 }
 
 function getReleaseConfig(config = {}) {
@@ -68,8 +112,17 @@ function getReleaseConfig(config = {}) {
       || releaseConfig.announcementBatchId
       || 'default'
   ).trim() || 'default';
+  const products = resolveProducts({ ...releaseConfig, repository });
 
-  return { enabled, repository, channelId, checkMinutes, announceLatestOnBoot, announcementBatchId };
+  return {
+    enabled,
+    repository,
+    channelId,
+    checkMinutes,
+    announceLatestOnBoot,
+    announcementBatchId,
+    products
+  };
 }
 
 async function fetchLatestRelease(repository) {
@@ -93,9 +146,16 @@ async function fetchLatestRelease(repository) {
   return response.json();
 }
 
+async function fetchLatestReleaseCached(repository, cache) {
+  if (!cache.has(repository)) {
+    cache.set(repository, fetchLatestRelease(repository));
+  }
+  return cache.get(repository);
+}
+
 function findProductAsset(release, product) {
   const assets = Array.isArray(release?.assets) ? release.assets : [];
-  return assets.find((asset) => product.assetPattern.test(asset.name || '')) || null;
+  return assets.find((asset) => product.assetPattern.test(asset.name || '')) || assets[0] || null;
 }
 
 function buildFingerprint(release, asset) {
@@ -103,10 +163,10 @@ function buildFingerprint(release, asset) {
     release.id,
     release.tag_name,
     release.published_at,
-    asset.id,
-    asset.name,
-    asset.size,
-    asset.updated_at
+    asset?.id,
+    asset?.name,
+    asset?.size,
+    asset?.updated_at
   ].map((part) => String(part || '')).join('|');
 }
 
@@ -179,9 +239,10 @@ function extractProductNotes(releaseBody, product) {
 }
 
 function buildReleaseEmbed({ product, release, asset }) {
-  const updatedAt = asset.updated_at || release.published_at;
+  const updatedAt = asset?.updated_at || release.published_at;
   const updatedAtTimestamp = updatedAt ? Math.floor(new Date(updatedAt).getTime() / 1000) : null;
   const notes = extractProductNotes(release.body, product);
+  const versionLabel = release.name || release.tag_name || 'latest';
 
   return new EmbedBuilder()
     .setColor(product.color)
@@ -191,9 +252,10 @@ function buildReleaseEmbed({ product, release, asset }) {
         `Ya esta disponible una nueva actualizacion de **${product.name}**.`,
         'Puedes instalarla directamente desde el panel de **Actualizaciones** dentro de la app.',
         '',
-        `**Version:** \`${release.tag_name || release.name || 'latest'}\``,
-        `**Build detectado:** \`${asset.name}\``,
-        updatedAtTimestamp ? `**Ultimo build:** <t:${updatedAtTimestamp}:R>` : null
+        `**Version:** \`${versionLabel}\``,
+        release.tag_name ? `**Tag:** \`${release.tag_name}\`` : null,
+        asset?.name ? `**Build detectado:** \`${asset.name}\`` : null,
+        updatedAtTimestamp ? `**Publicado:** <t:${updatedAtTimestamp}:R>` : null
       ].filter(Boolean).join('\n')
     )
     .addFields({
@@ -214,19 +276,19 @@ async function checkReleaseUpdates(client, { config, database, silent = false } 
   if (!releaseConfig.enabled) return { checked: false, reason: 'disabled' };
   if (!releaseConfig.channelId) return { checked: false, reason: 'missing_channel' };
 
-  const release = await fetchLatestRelease(releaseConfig.repository);
   const channel = await client.channels.fetch(releaseConfig.channelId).catch(() => null);
   if (!channel?.isTextBased?.()) return { checked: false, reason: 'invalid_channel' };
 
+  const releaseCache = new Map();
   let announced = 0;
   let tracked = 0;
 
-  for (const product of PRODUCT_DEFINITIONS) {
+  for (const product of releaseConfig.products) {
+    const release = await fetchLatestReleaseCached(product.repository, releaseCache);
     const asset = findProductAsset(release, product);
-    if (!asset) continue;
 
     tracked += 1;
-    const settingKey = `release_monitor:${releaseConfig.repository}:${product.id}`;
+    const settingKey = `release_monitor:${product.repository}:${product.id}`;
     const fingerprint = buildFingerprint(release, asset);
     const previousFingerprint = database.getSetting(settingKey);
 
@@ -246,7 +308,7 @@ async function checkReleaseUpdates(client, { config, database, silent = false } 
     announced += 1;
   }
 
-  return { checked: true, repository: releaseConfig.repository, tracked, announced };
+  return { checked: true, tracked, announced };
 }
 
 async function announceLatestReleaseOnce(client, { config, database } = {}) {
@@ -256,21 +318,21 @@ async function announceLatestReleaseOnce(client, { config, database } = {}) {
   }
   if (!releaseConfig.channelId) return { checked: false, reason: 'missing_channel' };
 
-  const release = await fetchLatestRelease(releaseConfig.repository);
   const channel = await client.channels.fetch(releaseConfig.channelId).catch(() => null);
   if (!channel?.isTextBased?.()) return { checked: false, reason: 'invalid_channel' };
 
+  const releaseCache = new Map();
   let announced = 0;
   let tracked = 0;
 
-  for (const product of PRODUCT_DEFINITIONS) {
+  for (const product of releaseConfig.products) {
+    const release = await fetchLatestReleaseCached(product.repository, releaseCache);
     const asset = findProductAsset(release, product);
-    if (!asset) continue;
 
     tracked += 1;
     const fingerprint = buildFingerprint(release, asset);
-    const manualKey = `release_monitor:manual:${releaseConfig.announcementBatchId}:${releaseConfig.repository}:${releaseConfig.channelId}:${product.id}`;
-    const regularKey = `release_monitor:${releaseConfig.repository}:${product.id}`;
+    const manualKey = `release_monitor:manual:${releaseConfig.announcementBatchId}:${product.repository}:${releaseConfig.channelId}:${product.id}`;
+    const regularKey = `release_monitor:${product.repository}:${product.id}`;
     const previousManualFingerprint = database.getSetting(manualKey);
 
     if (previousManualFingerprint === fingerprint) {
@@ -284,7 +346,7 @@ async function announceLatestReleaseOnce(client, { config, database } = {}) {
     announced += 1;
   }
 
-  return { checked: true, repository: releaseConfig.repository, tracked, announced };
+  return { checked: true, tracked, announced };
 }
 
 function startReleaseMonitor(client, { config, database }) {
@@ -297,6 +359,10 @@ function startReleaseMonitor(client, { config, database }) {
     console.warn('Monitor de updates desactivado: falta UPDATE_ANNOUNCEMENT_CHANNEL_ID o config.updateAnnouncementChannelId.');
     return null;
   }
+
+  const productSummary = releaseConfig.products
+    .map((product) => `${product.name}=${product.repository}`)
+    .join(', ');
 
   const runCheck = (silent = false) => {
     checkReleaseUpdates(client, { config, database, silent }).then((result) => {
@@ -330,7 +396,7 @@ function startReleaseMonitor(client, { config, database }) {
   const timer = setInterval(runCheck, releaseConfig.checkMinutes * 60 * 1000);
   timer.unref();
   console.log(
-    `Monitor de updates activo: repo=${releaseConfig.repository}, cada ${releaseConfig.checkMinutes} min.`
+    `Monitor de updates activo: ${productSummary}, cada ${releaseConfig.checkMinutes} min.`
   );
   return timer;
 }

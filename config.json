@@ -5,10 +5,37 @@
   "updateAnnouncementChannelId": "1407525003997741116",
   "releaseAnnouncements": {
     "enabled": true,
-    "repository": "CeroCee/CeroCee-zentuxoptimizer-releases",
     "checkMinutes": 10,
     "announceLatestOnBoot": true,
-    "announcementBatchId": "latest-v7-optimizer-2026-07-28"
+    "announcementBatchId": "source-repos-2026-07-28",
+    "products": [
+      {
+        "id": "zentux-optimizer",
+        "name": "Zentux Optimizer",
+        "repository": "CeroCee/zentux-updates",
+        "icon": "Optimizer",
+        "color": 15419545,
+        "assetPattern": "zentuxoptimizer.*\\.exe$",
+        "noteHeadings": [
+          "zentux optimizer",
+          "optimizer",
+          "optimizador"
+        ]
+      },
+      {
+        "id": "zentux-v7",
+        "name": "Zentux v7",
+        "repository": "CeroCee/zentux-releases1",
+        "icon": "v7",
+        "color": 15680580,
+        "assetPattern": "zentux[._ -]?v7.*\\.exe$",
+        "noteHeadings": [
+          "zentux v7",
+          "v7",
+          "autoclicker"
+        ]
+      }
+    ]
   },
   "reactionRewardsStartAt": "2026-07-02T00:00:00-04:00",
   "authorizedVoiceChannels": [
