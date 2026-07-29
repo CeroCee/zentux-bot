@@ -403,6 +403,7 @@ function paymentMethod(license) {
   return ({
     roblox: 'Robux',
     stripe: 'Stripe',
+    paypal: 'PayPal',
     giveaway: 'Regalo',
     shop: 'Zentux Shop',
     reward: 'Zentux Rewards',
