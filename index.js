@@ -399,6 +399,17 @@ function formatDiscordDate(value) {
   return `<t:${Math.floor(new Date(value).getTime() / 1000)}:F>`;
 }
 
+function paymentSource(license = {}) {
+  const explicit = String(license.source || license.paymentProvider || '').trim().toLowerCase();
+  if (explicit) return explicit;
+  if (license.paypalOrderId || license.paypalSubscriptionId || license.paypalCustomerId) return 'paypal';
+  if (license.stripeCheckoutSessionId || license.stripeSubscriptionId || license.stripeCustomerId) return 'stripe';
+  if (license.robloxPurchaseId || license.robloxProductId) return 'roblox';
+  if (String(license.paymentCurrency || '').toLowerCase() === 'zcoins') return 'shop';
+  if (Number.isFinite(license.paymentAmount)) return 'paid';
+  return '';
+}
+
 function paymentMethod(license) {
   return ({
     roblox: 'Robux',
@@ -411,7 +422,7 @@ function paymentMethod(license) {
     content_creator: 'Beneficio Content Creator',
     signed_player: 'Beneficio Signed Player',
     paid: 'Compra directa'
-  })[license.source] || 'No disponible';
+  })[paymentSource(license)] || 'No disponible';
 }
 
 function discordBuyerLabel(license) {
