@@ -414,6 +414,15 @@ function paymentMethod(license) {
   })[license.source] || 'No disponible';
 }
 
+function discordBuyerLabel(license) {
+  const userId = String(license.discordUserId || '').trim();
+  const username = String(license.discordUsername || '').trim();
+  if (!userId) return 'No vinculado';
+  return username
+    ? `<@${userId}>\n${username} (${userId})`
+    : `<@${userId}>\nID: ${userId}`;
+}
+
 function licenseOrigin(license) {
   if (license.source === 'content_creator') return 'Content Creator';
   if (license.source === 'signed_player') return 'Signed Player';
@@ -1407,7 +1416,8 @@ async function syncPurchaseLogs() {
         description: 'El servidor genero una licencia nueva y lista para entregar.'
       }).addFields(
         { name: 'Codigo generado', value: `\`${license.licenseKey}\`` },
-        { name: 'Comprador', value: String(license.buyer || 'No disponible'), inline: true },
+        { name: 'Comprador / correo', value: String(license.buyer || 'No disponible'), inline: true },
+        { name: 'Discord vinculado', value: discordBuyerLabel(license), inline: true },
         { name: 'Metodo de pago', value: paymentMethod(license), inline: true },
         { name: 'Importe', value: formatPayment(license), inline: true },
         { name: 'Plan', value: formatPlan(license), inline: true },
