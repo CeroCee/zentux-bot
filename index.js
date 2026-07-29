@@ -573,6 +573,7 @@ function licenseErrorMessage(error) {
     unavailable: 'El servidor de licencias no esta disponible. Intenta nuevamente.',
     already_claimed: 'Ya reclamaste tu key exclusiva para este beneficio.',
     restricted_license: 'Esa key pertenece a otra cuenta de Discord.',
+    invalid_duration: 'La duracion indicada no es valida.',
     INVALID_GIVEAWAY_DURATION: error.message
   };
   return messages[error.code] || 'No se pudo procesar la licencia.';
@@ -1194,6 +1195,76 @@ async function handleLogs(interaction) {
   if (type === 'generation') await syncLicenseEventLogs();
 }
 
+async function handleGiveawayGrant(interaction) {
+  if (!interaction.inGuild() || interaction.guildId !== GUILD_ID) {
+    return interaction.reply({ content: 'Este comando solo funciona en el servidor oficial de Zentux.', flags: EPHEMERAL });
+  }
+
+  await interaction.deferReply({ flags: EPHEMERAL });
+  const adminMember = await interaction.guild.members.fetch(interaction.user.id);
+  if (!adminMember.permissions.has(PermissionFlagsBits.Administrator)) {
+    return interaction.editReply({ content: 'Solo los administradores pueden regalar keys automaticamente.' });
+  }
+
+  const targetUser = interaction.options.getUser('usuario', true);
+  if (targetUser.bot) {
+    return interaction.editReply({ content: 'No puedo asignar una licencia Zentux a un bot.' });
+  }
+
+  const targetMember = await interaction.guild.members.fetch(targetUser.id).catch(() => null);
+  if (!targetMember) {
+    return interaction.editReply({ content: 'Ese usuario no esta dentro del servidor.' });
+  }
+  if (targetMember.roles.cache.has(CONTENT_CREATOR_ROLE_ID) || targetMember.roles.cache.has(SIGNED_PLAYER_ROLE_ID)) {
+    return interaction.editReply({
+      content: 'Ese usuario tiene un rol prioritario de Content Creator o Signed Player. No le voy a poner una giveaway encima.'
+    });
+  }
+
+  const days = Number.parseInt(interaction.options.getString('duracion') || '7', 10);
+
+  try {
+    const data = await licenseApi.grantGiveaway({
+      discordUserId: targetUser.id,
+      discordUsername: targetMember.displayName || targetUser.username,
+      days,
+      note: `Direct giveaway by ${interaction.user.tag} (${interaction.user.id})`
+    });
+    const license = data.license;
+    const grantedRole = await getGiveawayAccessRole(interaction.guild);
+
+    for (const roleId of [BUYER_ROLE_ID, REWARD_ACCESS_ROLE_ID]) {
+      if (!roleId || !targetMember.roles.cache.has(roleId)) continue;
+      const role = await interaction.guild.roles.fetch(roleId).catch(() => null);
+      if (role) {
+        await targetMember.roles.remove(role, 'Giveaway directa reemplaza otro acceso no prioritario Zentux').catch(() => null);
+      }
+    }
+    if (!targetMember.roles.cache.has(grantedRole.id)) {
+      await targetMember.roles.add(grantedRole, `Key giveaway directa dada por ${interaction.user.tag}`);
+    }
+
+    const embed = brandEmbed({
+      color: COLORS.success,
+      title: '🎁 Key giveaway aplicada',
+      description: `${targetUser} recibio una key giveaway y ya quedo vinculada a su perfil de Zentux.`
+    }).addFields(
+      { name: 'Usuario', value: `${targetUser.tag}\n\`${targetUser.id}\`` },
+      { name: 'Codigo', value: `\`${license.licenseKey}\`` },
+      { name: 'Rol asignado', value: `<@&${grantedRole.id}>`, inline: true },
+      { name: 'Duracion', value: formatPlan(license), inline: true },
+      { name: 'Expira', value: expiryLabel(license), inline: true }
+    );
+
+    await interaction.editReply({ embeds: [embed] });
+    await syncBuyerRoles();
+    await syncLicenseEventLogs();
+  } catch (error) {
+    console.error('Error en /darkey:', error.code || error.message);
+    await interaction.editReply({ content: licenseErrorMessage(error) });
+  }
+}
+
 async function handleGiveawayCommand(interaction) {
   if (!interaction.inGuild() || interaction.guildId !== GUILD_ID) {
     return interaction.reply({ content: 'Este comando solo funciona en el servidor oficial de Zentux.', flags: EPHEMERAL });
@@ -1715,6 +1786,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       if (interaction.commandName === 'generar') return await handleGenerate(interaction);
       if (interaction.commandName === 'signed-player') return await handleGenerate(interaction);
       if (interaction.commandName === 'generar-giveaway') return await handleGenerate(interaction);
+      if (interaction.commandName === 'darkey') return await handleGiveawayGrant(interaction);
       if (interaction.commandName === 'giveaway') return await handleGiveawayCommand(interaction);
       if (interaction.commandName === 'logs') return await handleLogs(interaction);
       if (interaction.commandName === 'borrar') return await handleDeleteCommand(interaction);

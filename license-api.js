@@ -67,6 +67,7 @@ function createLicenseApi({ baseUrl, secret }) {
     acknowledgeLicenseEvents: (guildId, eventIds) => request('/api/discord/license-events/ack', { guildId, eventIds }),
     deleteLicenses: (payload) => request('/api/discord/licenses/delete', payload),
     generateGiveaway: (payload) => request('/api/discord/generate-giveaway', payload),
+    grantGiveaway: (payload) => request('/api/discord/giveaway/grant', payload),
     createContentCreator: (payload) => request('/api/discord/content/create', payload),
     contentCreators: (guildId) => request('/api/discord/content/active', { guildId }),
     deactivateContentCreator: (guildId, discordUserId) => request('/api/discord/content/deactivate', { guildId, discordUserId }),

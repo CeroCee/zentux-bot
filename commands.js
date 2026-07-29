@@ -177,6 +177,30 @@ const commands = [
         .setRequired(true)
     ),
   new SlashCommandBuilder()
+    .setName('darkey')
+    .setDescription('Regala y vincula automaticamente una key giveaway a un usuario')
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+    .setDMPermission(false)
+    .addUserOption((option) =>
+      option
+        .setName('usuario')
+        .setDescription('Usuario que recibira la key giveaway automaticamente')
+        .setRequired(true)
+    )
+    .addStringOption((option) =>
+      option
+        .setName('duracion')
+        .setDescription('Duracion de la key giveaway. Si no eliges, sera 7 dias')
+        .setRequired(false)
+        .addChoices(
+          { name: '1 dia', value: '1' },
+          { name: '7 dias', value: '7' },
+          { name: '15 dias', value: '15' },
+          { name: '30 dias', value: '30' },
+          { name: '2 meses', value: '60' }
+        )
+    ),
+  new SlashCommandBuilder()
     .setName('giveaway')
     .setDescription('Crea y administra giveaways con boton de participacion')
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
