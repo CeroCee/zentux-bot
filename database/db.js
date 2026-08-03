@@ -82,6 +82,7 @@ db.exec(`
     prize TEXT NOT NULL,
     description TEXT,
     winnerCount INTEGER NOT NULL DEFAULT 1,
+    requiredRoleId TEXT,
     hostId TEXT NOT NULL,
     endsAt INTEGER NOT NULL,
     status TEXT NOT NULL DEFAULT 'active',
@@ -140,7 +141,8 @@ for (const [columnName, definition] of Object.entries(requiredUserColumns)) {
 }
 
 const requiredGiveawayColumns = {
-  forcedWinnerIdsJson: "TEXT NOT NULL DEFAULT '[]'"
+  forcedWinnerIdsJson: "TEXT NOT NULL DEFAULT '[]'",
+  requiredRoleId: 'TEXT'
 };
 const existingGiveawayColumns = new Set(
   db.pragma('table_info(giveaways)').map((column) => column.name)
@@ -277,9 +279,9 @@ const queries = {
   createGiveaway: db.prepare(`
     INSERT INTO giveaways (
       id, guildId, channelId, messageId, prize, description,
-      winnerCount, hostId, endsAt, status, winnersJson, forcedWinnerIdsJson, createdAt
+      winnerCount, requiredRoleId, hostId, endsAt, status, winnersJson, forcedWinnerIdsJson, createdAt
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', '[]', ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', '[]', ?, ?)
   `),
 
   updateGiveawayMessageId: db.prepare(`
@@ -697,6 +699,7 @@ function createGiveaway(giveaway) {
   const forcedWinnerIds = Array.isArray(giveaway.forcedWinnerIds)
     ? [...new Set(giveaway.forcedWinnerIds.map((userId) => validateUserId(userId)))]
     : [];
+  const requiredRoleId = giveaway.requiredRoleId ? validateUserId(giveaway.requiredRoleId) : null;
   const endsAt = Number.parseInt(giveaway.endsAt, 10);
   if (!Number.isSafeInteger(endsAt) || endsAt <= Date.now()) {
     throw new TypeError('endsAt debe ser una fecha futura en milisegundos.');
@@ -711,6 +714,7 @@ function createGiveaway(giveaway) {
     prize,
     description,
     winnerCount,
+    requiredRoleId,
     hostId,
     endsAt,
     JSON.stringify(forcedWinnerIds),

@@ -240,6 +240,12 @@ const commands = [
             .addChannelTypes(ChannelType.GuildText)
             .setRequired(false)
         )
+        .addRoleOption((option) =>
+          option
+            .setName('rol_requerido')
+            .setDescription('Opcional: solo usuarios con este rol podran participar')
+            .setRequired(false)
+        )
         .addStringOption((option) =>
           option
             .setName('descripcion')

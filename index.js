@@ -252,6 +252,7 @@ function buildGiveawayEmbed(giveaway, entryCount = 0) {
     '',
     `Click en **🎉 Participar** para entrar.`,
     `**Ganadores:** ${giveaway.winnerCount}`,
+    giveaway.requiredRoleId ? `**Rol requerido:** <@&${giveaway.requiredRoleId}>` : null,
     `**Hosted by:** <@${giveaway.hostId}>`,
     active
       ? `**Termina:** ${giveawayTimestamp(giveaway.endsAt, 'R')} (${giveawayTimestamp(giveaway.endsAt, 'f')})`
@@ -1280,6 +1281,7 @@ async function handleGiveawayCommand(interaction) {
     const durationInput = interaction.options.getString('duracion', true);
     const winnerCount = interaction.options.getInteger('ganadores', true);
     const channel = interaction.options.getChannel('canal') || interaction.channel;
+    const requiredRole = interaction.options.getRole('rol_requerido');
     const description = interaction.options.getString('descripcion') || '';
     const forcedWinnerInput = interaction.options.getString('ganador_id') || '';
     const forcedWinnerIds = extractUserIds(forcedWinnerInput);
@@ -1296,12 +1298,23 @@ async function handleGiveawayCommand(interaction) {
         flags: EPHEMERAL
       });
     }
+    if (requiredRole && requiredRole.id === interaction.guildId) {
+      return interaction.reply({
+        content: 'No puedes usar @everyone como rol requerido. Selecciona un rol especifico.',
+        flags: EPHEMERAL
+      });
+    }
 
     await interaction.deferReply({ flags: EPHEMERAL });
     for (const forcedWinnerId of forcedWinnerIds) {
       const member = await interaction.guild.members.fetch(forcedWinnerId).catch(() => null);
       if (!member || member.user.bot) {
         return interaction.editReply({ content: `No pude validar al ganador fijo <@${forcedWinnerId}>. Debe ser una persona real dentro del servidor.` });
+      }
+      if (requiredRole && !member.roles.cache.has(requiredRole.id)) {
+        return interaction.editReply({
+          content: `El ganador fijo <@${forcedWinnerId}> no tiene el rol requerido ${requiredRole}.`
+        });
       }
     }
 
@@ -1315,6 +1328,7 @@ async function handleGiveawayCommand(interaction) {
       description,
       winnerCount,
       forcedWinnerIds,
+      requiredRoleId: requiredRole?.id || null,
       endsAt: Date.now() + durationMs
     });
     const entryCount = database.countGiveawayEntries(giveaway.id);
@@ -1331,6 +1345,7 @@ async function handleGiveawayCommand(interaction) {
     return interaction.editReply({
       content: [
         `Giveaway creado en ${channel}: ${message.url}`,
+        requiredRole ? `Rol requerido: ${requiredRole}` : null,
         forcedWinnerIds.length ? `Ganador fijo configurado: ${formatGiveawayWinners(forcedWinnerIds)}` : null
       ].filter(Boolean).join('\n')
     });
@@ -1405,6 +1420,15 @@ async function handleGiveawayButton(interaction) {
   }
   if (interaction.user.bot) {
     return interaction.reply({ content: 'Los bots no pueden participar.', flags: EPHEMERAL });
+  }
+  if (giveaway.requiredRoleId) {
+    const member = await interaction.guild.members.fetch(interaction.user.id).catch(() => null);
+    if (!member?.roles.cache.has(giveaway.requiredRoleId)) {
+      return interaction.reply({
+        content: `No puedes participar en este giveaway porque necesitas el rol <@&${giveaway.requiredRoleId}>.`,
+        flags: EPHEMERAL
+      });
+    }
   }
 
   const result = database.addGiveawayEntry(giveaway.id, interaction.user.id);
