@@ -1281,13 +1281,31 @@ async function handleGiveawayCommand(interaction) {
     const durationInput = interaction.options.getString('duracion', true);
     const winnerCount = interaction.options.getInteger('ganadores', true);
     const channel = interaction.options.getChannel('canal') || interaction.channel;
-    const requiredRole = interaction.options.getRole('rol_requerido');
+    const selectedRequiredRole = interaction.options.getRole('rol_requerido');
+    const requiredRoleIdInput = interaction.options.getString('rol_id') || '';
     const description = interaction.options.getString('descripcion') || '';
     const forcedWinnerInput = interaction.options.getString('ganador_id') || '';
     const forcedWinnerIds = extractUserIds(forcedWinnerInput);
+    const requiredRoleIdFromInput = requiredRoleIdInput.replace(/[<@&>\s]/g, '');
+    if (requiredRoleIdInput && !/^\d{17,25}$/.test(requiredRoleIdFromInput)) {
+      return interaction.reply({
+        content: 'El `rol_id` debe ser un ID valido de Discord. Ejemplo: `1524136790594683001`.',
+        flags: EPHEMERAL
+      });
+    }
+    const requiredRole = selectedRequiredRole
+      || (requiredRoleIdFromInput
+        ? await interaction.guild.roles.fetch(requiredRoleIdFromInput).catch(() => null)
+        : null);
 
     if (!channel?.isTextBased()) {
       return interaction.reply({ content: 'El canal del giveaway debe ser un canal de texto.', flags: EPHEMERAL });
+    }
+    if (requiredRoleIdInput && !requiredRole) {
+      return interaction.reply({
+        content: `No encontre ningun rol con el ID \`${requiredRoleIdFromInput}\`. Verifica que el ID sea de este servidor.`,
+        flags: EPHEMERAL
+      });
     }
     if (forcedWinnerInput && forcedWinnerIds.length === 0) {
       return interaction.reply({ content: 'El ganador fijo debe ser un ID o mencion valida de Discord.', flags: EPHEMERAL });

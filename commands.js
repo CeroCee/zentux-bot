@@ -248,6 +248,14 @@ const commands = [
         )
         .addStringOption((option) =>
           option
+            .setName('rol_id')
+            .setDescription('Opcional: pega el ID del rol si no aparece en el selector')
+            .setRequired(false)
+            .setMinLength(17)
+            .setMaxLength(25)
+        )
+        .addStringOption((option) =>
+          option
             .setName('descripcion')
             .setDescription('Texto opcional que aparecera debajo del premio')
             .setRequired(false)
