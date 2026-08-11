@@ -1473,11 +1473,15 @@ async function syncLicenseEventLogs() {
     if (!channel?.isTextBased()) return;
     const data = await licenseApi.pendingLicenseEvents(GUILD_ID);
     const deliveredIds = [];
+    let shouldResyncRoles = false;
 
     for (const event of data.events || []) {
       const license = event.metadata || {};
       const isDeleted = event.eventType === 'deleted';
       const isReactivated = event.eventType === 'reactivated';
+      if (['generated', 'reactivated', 'extended', 'deleted'].includes(event.eventType)) {
+        shouldResyncRoles = true;
+      }
       const title = isDeleted
         ? 'Licencia borrada'
         : isReactivated
@@ -1512,6 +1516,9 @@ async function syncLicenseEventLogs() {
     if (deliveredIds.length > 0) {
       await licenseApi.acknowledgeLicenseEvents(GUILD_ID, deliveredIds);
       console.log(`Logs de generacion enviados: ${deliveredIds.length}.`);
+      if (shouldResyncRoles) {
+        await syncBuyerRoles();
+      }
     }
   } catch (error) {
     console.error('No se pudieron sincronizar los logs de generacion:', error.code || error.message);
