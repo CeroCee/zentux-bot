@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const {
   ActionRowBuilder,
+  AuditLogEvent,
   ApplicationCommandPermissionType,
   ButtonBuilder,
   ButtonStyle,
@@ -93,6 +94,53 @@ const client = new Client({
   ]
 });
 client.licenseApi = licenseApi;
+
+function auditContext(interaction, commandName) {
+  return {
+    actor: {
+      id: interaction.user.id,
+      username: interaction.user.username,
+      displayName: interaction.member?.displayName || interaction.user.globalName || interaction.user.username
+    },
+    auditCommand: commandName,
+    auditGuildId: interaction.guildId,
+    auditChannelId: interaction.channelId,
+    auditAutomated: false
+  };
+}
+
+async function roleCreationAuditContext(member, roleId, commandName) {
+  try {
+    const logs = await member.guild.fetchAuditLogs({ type: AuditLogEvent.MemberRoleUpdate, limit: 10 });
+    const entry = logs.entries.find((item) => {
+      if (item.target?.id !== member.id || Date.now() - item.createdTimestamp > 30_000) return false;
+      return item.changes?.some((change) =>
+        change.key === '$add' && Array.isArray(change.new)
+        && change.new.some((role) => role.id === roleId)
+      );
+    });
+    if (entry?.executor) {
+      return {
+        actor: {
+          id: entry.executor.id,
+          username: entry.executor.username,
+          displayName: entry.executor.globalName || entry.executor.username
+        },
+        auditCommand: commandName,
+        auditGuildId: member.guild.id,
+        auditAutomated: false
+      };
+    }
+  } catch (error) {
+    console.warn(`No se pudo resolver quién asignó el rol para auditoría: ${error.message}`);
+  }
+  return {
+    actor: { displayName: 'Automatización de roles de Discord' },
+    auditCommand: commandName,
+    auditGuildId: member.guild.id,
+    auditAutomated: true
+  };
+}
 
 function loadEvents(discordClient) {
   const eventsDirectory = path.join(__dirname, 'events');
@@ -1006,7 +1054,10 @@ async function handleGenerate(interaction) {
     }
     const days = Number.parseInt(interaction.options.getString('duracion', true), 10);
     const count = interaction.options.getInteger('cantidad', true);
-    const data = await licenseApi.generateGiveaway({ days, count, createdBy: interaction.user.id });
+    const data = await licenseApi.generateGiveaway({
+      days, count, createdBy: interaction.user.id,
+      ...auditContext(interaction, '/generar-giveaway')
+    });
     const keys = data.licenses.map((license) => license.licenseKey);
     const embed = brandEmbed({
       color: COLORS.store,
@@ -1024,7 +1075,8 @@ async function handleGenerate(interaction) {
     const data = await licenseApi.createSignedPlayer({
       guildId: interaction.guildId,
       discordUserId: interaction.user.id,
-      discordUsername: member.displayName || interaction.user.username
+      discordUsername: member.displayName || interaction.user.username,
+      ...auditContext(interaction, '/signed-player key')
     });
     const embed = brandEmbed({
       color: COLORS.success,
@@ -1046,7 +1098,8 @@ async function handleGenerate(interaction) {
   const data = await licenseApi.createContentCreator({
     guildId: interaction.guildId,
     discordUserId: interaction.user.id,
-    discordUsername: interaction.user.username
+    discordUsername: interaction.user.username,
+    ...auditContext(interaction, '/generar key')
   });
   const embed = brandEmbed({
     color: COLORS.success,
@@ -1229,7 +1282,8 @@ async function handleGiveawayGrant(interaction) {
       discordUserId: targetUser.id,
       discordUsername: targetMember.displayName || targetUser.username,
       days,
-      note: `Direct giveaway by ${interaction.user.tag} (${interaction.user.id})`
+      note: `Direct giveaway by ${interaction.user.tag} (${interaction.user.id})`,
+      ...auditContext(interaction, '/darkey')
     });
     const license = data.license;
     const grantedRole = await getGiveawayAccessRole(interaction.guild);
@@ -1677,10 +1731,14 @@ async function handlePriorityRoleAdded(oldMember, newMember) {
 
   try {
     if (contentCreatorAdded) {
+      const creationAudit = await roleCreationAuditContext(
+        newMember, CONTENT_CREATOR_ROLE_ID, 'role:auto-content-creator'
+      );
       const data = await licenseApi.createContentCreator({
         guildId: newMember.guild.id,
         discordUserId: newMember.id,
-        discordUsername: newMember.displayName || newMember.user.username
+        discordUsername: newMember.displayName || newMember.user.username,
+        ...creationAudit
       }).catch((error) => {
         if (error.code === 'already_claimed') return null;
         throw error;
@@ -1695,10 +1753,14 @@ async function handlePriorityRoleAdded(oldMember, newMember) {
     }
 
     if (signedPlayerAdded) {
+      const creationAudit = await roleCreationAuditContext(
+        newMember, SIGNED_PLAYER_ROLE_ID, 'role:auto-signed-player'
+      );
       const data = await licenseApi.createSignedPlayer({
         guildId: newMember.guild.id,
         discordUserId: newMember.id,
-        discordUsername: newMember.displayName || newMember.user.username
+        discordUsername: newMember.displayName || newMember.user.username,
+        ...creationAudit
       }).catch((error) => {
         if (error.code === 'already_claimed') return null;
         throw error;
