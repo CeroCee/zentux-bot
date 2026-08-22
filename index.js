@@ -1830,6 +1830,14 @@ client.once(Events.ClientReady, async (readyClient) => {
     status: 'online'
   });
   const guild = readyClient.guilds.cache.get(GUILD_ID) || await readyClient.guilds.fetch(GUILD_ID);
+  const allMembers = await guild.members.fetch();
+  const people = [...allMembers.values()].filter((member) => !member.user.bot);
+  for (let index = 0; index < people.length; index += 500) {
+    await licenseApi.syncMembers({ guildId: guild.id, members: people.slice(index, index + 500).map((member) => ({
+      userId: member.id, username: member.user.username, displayName: member.displayName,
+      joinedAt: member.joinedTimestamp, bot: member.user.bot
+    })) }).catch((error) => console.error('No se pudo sincronizar miembros:', error.message));
+  }
   const me = guild.members.me || await guild.members.fetchMe();
   if (me.nickname !== BOT_DISPLAY_NAME) {
     await me.setNickname(BOT_DISPLAY_NAME, 'Identidad oficial de Zentux').catch((error) => {
@@ -1853,6 +1861,22 @@ client.once(Events.ClientReady, async (readyClient) => {
   setInterval(expirePendingBets, 60 * 1000).unref();
   setInterval(finishExpiredGiveaways, 30 * 1000).unref();
   startReleaseMonitor(readyClient, { config, database });
+});
+
+client.on(Events.GuildMemberAdd, (member) => {
+  if (member.guild.id !== GUILD_ID || member.user.bot) return;
+  licenseApi.memberEvent({ guildId: member.guild.id, userId: member.id,
+    username: member.user.username, displayName: member.displayName,
+    eventType: 'join', occurredAt: member.joinedTimestamp || Date.now() })
+    .catch((error) => console.error('No se pudo registrar entrada:', error.message));
+});
+
+client.on(Events.GuildMemberRemove, (member) => {
+  if (member.guild.id !== GUILD_ID || member.user.bot) return;
+  licenseApi.memberEvent({ guildId: member.guild.id, userId: member.id,
+    username: member.user.username, displayName: member.displayName,
+    eventType: 'leave', occurredAt: Date.now() })
+    .catch((error) => console.error('No se pudo registrar salida:', error.message));
 });
 
 client.on(Events.GuildMemberUpdate, (oldMember, newMember) => {
