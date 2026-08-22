@@ -1821,6 +1821,23 @@ async function syncSitePresence() {
   }
 }
 
+async function syncDiscordMembership() {
+  try {
+    const guild = client.guilds.cache.get(GUILD_ID) || await client.guilds.fetch(GUILD_ID);
+    const allMembers = await guild.members.fetch();
+    const people = [...allMembers.values()].filter((member) => !member.user.bot);
+    for (let index = 0; index < people.length; index += 500) {
+      await licenseApi.syncMembers({ guildId: guild.id, members: people.slice(index, index + 500).map((member) => ({
+        userId: member.id, username: member.user.username, displayName: member.displayName,
+        joinedAt: member.joinedTimestamp, bot: false
+      })) });
+    }
+    console.log(`Historial de miembros sincronizado: ${people.length}.`);
+  } catch (error) {
+    console.error('No se pudo sincronizar el historial de miembros:', error.code || error.message);
+  }
+}
+
 client.once(Events.ClientReady, async (readyClient) => {
   console.log('Sistema de Z-Coins retirado: se omite la migracion de economia local.');
   console.log(`Bot listo como ${readyClient.user.tag}`);
@@ -1830,14 +1847,7 @@ client.once(Events.ClientReady, async (readyClient) => {
     status: 'online'
   });
   const guild = readyClient.guilds.cache.get(GUILD_ID) || await readyClient.guilds.fetch(GUILD_ID);
-  const allMembers = await guild.members.fetch();
-  const people = [...allMembers.values()].filter((member) => !member.user.bot);
-  for (let index = 0; index < people.length; index += 500) {
-    await licenseApi.syncMembers({ guildId: guild.id, members: people.slice(index, index + 500).map((member) => ({
-      userId: member.id, username: member.user.username, displayName: member.displayName,
-      joinedAt: member.joinedTimestamp, bot: member.user.bot
-    })) }).catch((error) => console.error('No se pudo sincronizar miembros:', error.message));
-  }
+  await syncDiscordMembership();
   const me = guild.members.me || await guild.members.fetchMe();
   if (me.nickname !== BOT_DISPLAY_NAME) {
     await me.setNickname(BOT_DISPLAY_NAME, 'Identidad oficial de Zentux').catch((error) => {
@@ -1858,6 +1868,7 @@ client.once(Events.ClientReady, async (readyClient) => {
   setInterval(syncContentCreatorLicenses, SYNC_MINUTES * 60 * 1000).unref();
   setInterval(syncSignedPlayerLicenses, SYNC_MINUTES * 60 * 1000).unref();
   setInterval(syncSitePresence, 60 * 1000).unref();
+  setInterval(syncDiscordMembership, 60 * 60 * 1000).unref();
   setInterval(expirePendingBets, 60 * 1000).unref();
   setInterval(finishExpiredGiveaways, 30 * 1000).unref();
   startReleaseMonitor(readyClient, { config, database });
