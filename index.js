@@ -181,6 +181,16 @@ const pendingLicenseDeletes = new Map();
 async function syncApplicationCommands() {
   const rest = new REST({ version: '10' }).setToken(TOKEN);
   const body = commands.map((command) => command.toJSON());
+  // Remove any legacy global registrations as well as replacing guild commands.
+  try {
+    const globalCommands = await rest.get(Routes.applicationCommands(CLIENT_ID));
+    for (const command of globalCommands) {
+      if (!['signed-player', 'admin-signed-player'].includes(command.name)) continue;
+      await rest.delete(Routes.applicationCommand(CLIENT_ID, command.id));
+    }
+  } catch (error) {
+    console.error('No se pudieron retirar comandos globales antiguos:', error.code || error.message);
+  }
   await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body });
   console.log(`${body.length} comandos de Discord sincronizados.`);
 }
@@ -485,7 +495,8 @@ function formatPayment(license) {
 }
 
 function formatPlan(license) {
-  if (['content_creator', 'signed_player'].includes(license.source)) return 'Mientras conserve el rol';
+  if (license.source === 'signed_player') return 'Programa retirado';
+  if (license.source === 'content_creator') return 'Mientras conserve el rol';
   if (license.durationHours) return `${license.durationHours} hora(s)`;
   if (!license.durationDays) return 'No disponible';
   return license.durationDays === 365 ? 'Anual (365 dias)' : `${license.durationDays} dia(s)`;
@@ -493,13 +504,13 @@ function formatPlan(license) {
 
 function remainingLabel(license) {
   if (license.source === 'content_creator') return 'Mientras conserves el rol Content Creator';
-  if (license.source === 'signed_player') return 'Mientras conserves el rol Signed Player';
+  if (license.source === 'signed_player') return 'Beneficio retirado';
   return formatRemaining(license.paidUntil);
 }
 
 function expiryLabel(license) {
   if (license.source === 'content_creator') return 'Se desactiva al perder el rol Content Creator';
-  if (license.source === 'signed_player') return 'Se desactiva al perder el rol Signed Player';
+  if (license.source === 'signed_player') return 'Programa Signed Players retirado';
   return discordDate(license.paidUntil);
 }
 
@@ -1611,7 +1622,10 @@ async function syncBuyerRoles() {
         await validateRoleDependentLicense(guild, record.discordUserId, record.source);
         continue;
       }
-      const member = await fetchCurrentMember(guild, record.discordUserId);
+      const member = await guild.members.fetch(record.discordUserId).catch((error) => {
+        if (Number(error.code) === 10007) return null;
+        throw error;
+      });
       if (!member) continue;
 
       const expectedRole = record.source === 'reward'
