@@ -22,3 +22,9 @@ npm install
 npm run deploy-commands
 npm start
 ```
+
+## Manual benefit roles
+
+Content Creator is assigned and removed by administrators in Discord. The bot never adds this role from a stored license, including during periodic synchronization, `/info`, or `/canjear`. Removing the role immediately deactivates the Content Creator benefit; startup and periodic checks recover missed events using a fresh member fetch. Temporary Discord API failures do not count as role removal. Assigning the role again allows the benefit to be reactivated.
+
+The Signed Players program is retired. `/signed-player` and `/admin-signed-player` are no longer registered, role changes no longer create Signed Player licenses, and old Signed Player benefits are deactivated without deleting purchase history. Paid Buyer, Reward Access, and Giveaway Access still synchronize from their licenses.
