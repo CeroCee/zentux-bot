@@ -486,6 +486,7 @@ function licenseOrigin(license) {
 }
 
 function formatPayment(license) {
+  if (String(license.paymentCurrency || '').toLowerCase() === 'free') return 'Gratis';
   if (['giveaway', 'custom', 'content_creator', 'signed_player', 'reward'].includes(license.source)) return 'Gratis';
   if (!Number.isFinite(license.paymentAmount)) return 'No disponible';
   if (license.paymentCurrency === 'robux') return `${license.paymentAmount.toLocaleString('en-US')} Robux`;
