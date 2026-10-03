@@ -5,7 +5,6 @@ const path = require('node:path');
 const {
   ActionRowBuilder,
   AuditLogEvent,
-  ApplicationCommandPermissionType,
   ButtonBuilder,
   ButtonStyle,
   Client,
@@ -44,7 +43,6 @@ const BUYER_ROLE_ID = process.env.PAID_BUYER_ROLE_ID || '1392620407483531465';
 const REWARD_ACCESS_ROLE_ID = process.env.REWARD_ACCESS_ROLE_ID || '1523246114059587594';
 const GIVEAWAY_ACCESS_ROLE_ID = process.env.GIVEAWAY_ACCESS_ROLE_ID || '1529323244891410432';
 const CONTENT_CREATOR_ROLE_ID = process.env.CONTENT_CREATOR_ROLE_ID || '1392619993153142834';
-const SIGNED_PLAYER_ROLE_ID = process.env.SIGNED_PLAYER_ROLE_ID || '1524136790594683001';
 const SYNC_MINUTES = Math.max(1, Number.parseInt(process.env.LICENSE_SYNC_MINUTES || '5', 10) || 5);
 const PURCHASE_SYNC_SECONDS = Math.max(15, Number.parseInt(process.env.PURCHASE_SYNC_SECONDS || '30', 10) || 30);
 const EPHEMERAL = MessageFlags.Ephemeral;
@@ -183,23 +181,7 @@ const pendingLicenseDeletes = new Map();
 async function syncApplicationCommands() {
   const rest = new REST({ version: '10' }).setToken(TOKEN);
   const body = commands.map((command) => command.toJSON());
-  const registered = await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body });
-  const signedCommand = registered.find((command) => command.name === 'signed-player');
-  if (signedCommand) {
-    try {
-      await rest.put(Routes.applicationCommandPermissions(CLIENT_ID, GUILD_ID, signedCommand.id), {
-        body: {
-          permissions: [
-            { id: GUILD_ID, type: ApplicationCommandPermissionType.Role, permission: false },
-            { id: SIGNED_PLAYER_ROLE_ID, type: ApplicationCommandPermissionType.Role, permission: true }
-          ]
-        }
-      });
-      console.log('Permisos de /signed-player limitados al rol Signed Players.');
-    } catch (error) {
-      console.error('No se pudieron aplicar permisos visibles de /signed-player:', error.message);
-    }
-  }
+  await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body });
   console.log(`${body.length} comandos de Discord sincronizados.`);
 }
 
@@ -584,15 +566,37 @@ async function getContentCreatorRole(guild) {
   return getRoleById(guild, CONTENT_CREATOR_ROLE_ID, 'CONTENT_CREATOR_ROLE_ID');
 }
 
-async function getSignedPlayerRole(guild) {
-  return getRoleById(guild, SIGNED_PLAYER_ROLE_ID, 'SIGNED_PLAYER_ROLE_ID');
+// Manual benefit roles authorize licenses; a license must never restore these roles.
+function isRoleDependentSource(source) {
+  return source === 'content_creator' || source === 'signed_player';
+}
+
+async function fetchCurrentMember(guild, userId) {
+  try {
+    return await guild.members.fetch({ user: userId, force: true });
+  } catch (error) {
+    if (Number(error.code) === 10007) return null; // Unknown Member, not an API outage.
+    throw error;
+  }
+}
+
+async function validateRoleDependentLicense(guild, userId, source) {
+  if (source === 'signed_player') {
+    await licenseApi.deactivateSignedPlayer(guild.id, userId);
+    return false;
+  }
+  if (source !== 'content_creator') return true;
+  const member = await fetchCurrentMember(guild, userId);
+  if (member?.roles.cache.has(CONTENT_CREATOR_ROLE_ID)) return true;
+  await licenseApi.deactivateContentCreator(guild.id, userId);
+  return false;
 }
 
 async function getRoleForLicenseSource(guild, source) {
   if (source === 'reward') return getRewardAccessRole(guild);
   if (source === 'giveaway') return getGiveawayAccessRole(guild);
   if (source === 'content_creator') return getContentCreatorRole(guild);
-  if (source === 'signed_player') return getSignedPlayerRole(guild);
+  if (source === 'signed_player') return null;
   const { role } = await getGuildAndRole();
   return role;
 }
@@ -607,7 +611,6 @@ function hasLicenseAccessRole(member) {
     || member?.roles.cache.has(REWARD_ACCESS_ROLE_ID)
     || member?.roles.cache.has(GIVEAWAY_ACCESS_ROLE_ID)
     || member?.roles.cache.has(CONTENT_CREATOR_ROLE_ID)
-    || member?.roles.cache.has(SIGNED_PLAYER_ROLE_ID)
   );
 }
 
@@ -651,8 +654,13 @@ async function handleRedeem(interaction) {
     });
 
     const license = data.license;
+    if (!await validateRoleDependentLicense(interaction.guild, interaction.user.id, license.source)) {
+      return interaction.editReply({ content: license.source === 'signed_player'
+        ? 'El programa Signed Players fue retirado. Esta licencia ya no concede acceso.'
+        : 'Tu beneficio Content Creator requiere el rol asignado por un administrador. El bot no lo vuelve a asignar.' });
+    }
     const grantedRole = await getRoleForLicenseSource(interaction.guild, license.source);
-    if (!member.roles.cache.has(grantedRole.id)) {
+    if (!isRoleDependentSource(license.source) && !member.roles.cache.has(grantedRole.id)) {
       await member.roles.add(grantedRole, `Licencia Zentux ${licenseOrigin(license).toLowerCase()} activa`);
     }
     redeemAttempts.delete(interaction.user.id);
@@ -722,8 +730,12 @@ async function handleInfo(interaction) {
 
     const targetMember = await interaction.guild.members.fetch(targetUser.id).catch(() => null);
     const data = await licenseApi.info(targetUser.id);
-    const license = data.license;
-    if (license.active) {
+    let license = data.license;
+    if (isRoleDependentSource(license.source)
+      && !await validateRoleDependentLicense(interaction.guild, targetUser.id, license.source)) {
+      license = { ...license, active: false };
+    }
+    if (license.active && !isRoleDependentSource(license.source)) {
       const expectedRole = targetMember
         ? await getRoleForLicenseSource(interaction.guild, license.source)
         : null;
@@ -732,7 +744,7 @@ async function handleInfo(interaction) {
           console.error(`No se pudo asignar rol de licencia a ${targetUser.id}:`, error.message);
         });
       }
-    } else if (targetMember) {
+    } else if (targetMember && !license.active && !isRoleDependentSource(license.source)) {
       const expiredRole = await getRoleForLicenseSource(interaction.guild, license.source);
       await targetMember.roles.remove(expiredRole, 'Licencia Zentux inactiva o vencida').catch(() => null);
     }
@@ -1046,7 +1058,7 @@ async function handleGenerate(interaction) {
   }
 
   await interaction.deferReply({ flags: EPHEMERAL });
-  const member = await interaction.guild.members.fetch(interaction.user.id);
+  const member = await fetchCurrentMember(interaction.guild, interaction.user.id);
 
   if (interaction.commandName === 'generar-giveaway') {
     if (!member.permissions.has(PermissionFlagsBits.Administrator)) {
@@ -1067,30 +1079,6 @@ async function handleGenerate(interaction) {
     return interaction.editReply({ embeds: [embed] });
   }
 
-  if (interaction.commandName === 'signed-player') {
-    if (!member.roles.cache.has(SIGNED_PLAYER_ROLE_ID)) {
-      return interaction.editReply({ content: 'Necesitas el rol **Zentux | Signed Players** para reclamar esta key.' });
-    }
-
-    const data = await licenseApi.createSignedPlayer({
-      guildId: interaction.guildId,
-      discordUserId: interaction.user.id,
-      discordUsername: member.displayName || interaction.user.username,
-      ...auditContext(interaction, '/signed-player key')
-    });
-    const embed = brandEmbed({
-      color: COLORS.success,
-      title: data.reactivated ? 'âœ… Beneficio Signed Player reactivado' : 'âœ… Key de Signed Player creada',
-      description: [
-        `Tu key exclusiva es:\n\`${data.license.licenseKey}\``,
-        '',
-        '**Vigencia:** mientras conserves el rol Zentux | Signed Players.',
-        'Solo tu cuenta de Discord puede vincular esta licencia.'
-      ].join('\n')
-    });
-    return interaction.editReply({ embeds: [embed] });
-  }
-
   if (!member.roles.cache.has(CONTENT_CREATOR_ROLE_ID)) {
     return interaction.editReply({ content: 'Necesitas el rol **Zentux | Content Creator** para reclamar esta key.' });
   }
@@ -1101,6 +1089,9 @@ async function handleGenerate(interaction) {
     discordUsername: interaction.user.username,
     ...auditContext(interaction, '/generar key')
   });
+  if (!await validateRoleDependentLicense(interaction.guild, interaction.user.id, 'content_creator')) {
+    return interaction.editReply({ content: 'El rol Content Creator fue retirado. Tu beneficio esta desactivado.' });
+  }
   const embed = brandEmbed({
     color: COLORS.success,
     title: data.reactivated ? '✅ Beneficio reactivado' : '✅ Key de Content Creator creada',
@@ -1124,7 +1115,7 @@ async function syncContentCreatorLicenses() {
     let buyerRolesRemoved = 0;
 
     for (const creator of data.creators || []) {
-      const member = await guild.members.fetch(creator.discordUserId).catch(() => null);
+      const member = await fetchCurrentMember(guild, creator.discordUserId);
       if (member?.roles.cache.has(CONTENT_CREATOR_ROLE_ID)) {
         if (member.roles.cache.has(BUYER_ROLE_ID)) {
           await member.roles.remove(BUYER_ROLE_ID, 'Content Creator usa su propio rol, no Buyer').catch(() => null);
@@ -1152,39 +1143,17 @@ async function syncContentCreatorLicenses() {
   }
 }
 
-async function syncSignedPlayerLicenses() {
+async function retireSignedPlayerLicenses() {
   if (signedPlayerSyncRunning) return;
   signedPlayerSyncRunning = true;
   try {
-    const guild = client.guilds.cache.get(GUILD_ID) || await client.guilds.fetch(GUILD_ID);
     const data = await licenseApi.signedPlayers(GUILD_ID);
-    let deactivated = 0;
-    let buyerRolesRemoved = 0;
-
     for (const player of data.players || []) {
-      const member = await guild.members.fetch(player.discordUserId).catch(() => null);
-      if (member?.roles.cache.has(SIGNED_PLAYER_ROLE_ID)) {
-        if (member.roles.cache.has(BUYER_ROLE_ID)) {
-          await member.roles.remove(BUYER_ROLE_ID, 'Signed Player usa su propio rol, no Buyer').catch(() => null);
-          buyerRolesRemoved += 1;
-        }
-        continue;
-      }
-
       await licenseApi.deactivateSignedPlayer(GUILD_ID, player.discordUserId);
-      deactivated += 1;
-      if (member?.roles.cache.has(BUYER_ROLE_ID)) {
-        const fallback = await licenseApi.info(player.discordUserId).catch(() => null);
-        if (!fallback?.license?.active) {
-          await member.roles.remove(BUYER_ROLE_ID, 'Perdio el rol Zentux Signed Player').catch(() => null);
-        }
-      }
     }
-
-    if (deactivated > 0) console.log(`Licencias Signed Player desactivadas: ${deactivated}.`);
-    if (buyerRolesRemoved > 0) console.log(`Roles Buyer retirados de Signed Players: ${buyerRolesRemoved}.`);
+    if (data.players?.length) console.log(`Beneficios Signed Players retirados: ${data.players.length}.`);
   } catch (error) {
-    console.error('No se pudieron sincronizar los Signed Players:', error.code || error.message);
+    console.error('No se pudieron retirar los beneficios Signed Players:', error.code || error.message);
   } finally {
     signedPlayerSyncRunning = false;
   }
@@ -1269,9 +1238,9 @@ async function handleGiveawayGrant(interaction) {
   if (!targetMember) {
     return interaction.editReply({ content: 'Ese usuario no esta dentro del servidor.' });
   }
-  if (targetMember.roles.cache.has(CONTENT_CREATOR_ROLE_ID) || targetMember.roles.cache.has(SIGNED_PLAYER_ROLE_ID)) {
+  if (targetMember.roles.cache.has(CONTENT_CREATOR_ROLE_ID)) {
     return interaction.editReply({
-      content: 'Ese usuario tiene un rol prioritario de Content Creator o Signed Player. No le voy a poner una giveaway encima.'
+      content: 'Ese usuario tiene un rol prioritario de Content Creator. No le voy a poner una giveaway encima.'
     });
   }
 
@@ -1635,42 +1604,29 @@ async function syncBuyerRoles() {
     ]);
     const rewardRole = await getRewardAccessRole(guild);
     const giveawayRole = await getGiveawayAccessRole(guild);
-    const contentCreatorRole = guild.roles.cache.get(CONTENT_CREATOR_ROLE_ID)
-      || await guild.roles.fetch(CONTENT_CREATOR_ROLE_ID).catch(() => null);
-    const signedPlayerRole = guild.roles.cache.get(SIGNED_PLAYER_ROLE_ID)
-      || await guild.roles.fetch(SIGNED_PLAYER_ROLE_ID).catch(() => null);
-    const protectedManualRoleIds = new Set([
-      CONTENT_CREATOR_ROLE_ID,
-      SIGNED_PLAYER_ROLE_ID
-    ]);
-
     let added = 0;
     let removed = 0;
     for (const record of data.members || []) {
-      const member = await guild.members.fetch(record.discordUserId).catch(() => null);
+      if (isRoleDependentSource(record.source)) {
+        await validateRoleDependentLicense(guild, record.discordUserId, record.source);
+        continue;
+      }
+      const member = await fetchCurrentMember(guild, record.discordUserId);
       if (!member) continue;
 
       const expectedRole = record.source === 'reward'
         ? rewardRole
         : record.source === 'giveaway'
           ? giveawayRole
-          : record.source === 'content_creator'
-            ? contentCreatorRole
-            : record.source === 'signed_player'
-              ? signedPlayerRole
-              : role;
-      if (!expectedRole) continue;
-      const hasPriorityManualRole = ['content_creator', 'signed_player'].includes(record.source)
-        ? false
-        : member.roles.cache.has(CONTENT_CREATOR_ROLE_ID) || member.roles.cache.has(SIGNED_PLAYER_ROLE_ID);
-      const otherRoles = [role, rewardRole, giveawayRole, contentCreatorRole, signedPlayerRole]
-        .filter((candidate) => candidate && candidate.id !== expectedRole.id)
-        .filter((candidate) => !protectedManualRoleIds.has(candidate.id));
+          : role;
+      const hasPriorityManualRole = member.roles.cache.has(CONTENT_CREATOR_ROLE_ID);
+      const otherRoles = [role, rewardRole, giveawayRole]
+        .filter((candidate) => candidate && candidate.id !== expectedRole.id);
       const hasExpectedRole = member.roles.cache.has(expectedRole.id);
 
       if (hasPriorityManualRole) {
         if (hasExpectedRole) {
-          await member.roles.remove(expectedRole, 'Content Creator/Signed Player reemplaza este acceso Zentux');
+          await member.roles.remove(expectedRole, 'Content Creator reemplaza este acceso Zentux');
           removed += 1;
         }
       } else if (record.active && !hasExpectedRole) {
@@ -1719,63 +1675,34 @@ async function removeConflictingAccessRoles(member, reason) {
   }
 }
 
-async function handlePriorityRoleAdded(oldMember, newMember) {
+async function handlePriorityRoleChanged(oldMember, newMember) {
   if (newMember.guild.id !== GUILD_ID || newMember.user.bot) return;
+  const hadRole = oldMember.roles.cache.has(CONTENT_CREATOR_ROLE_ID);
+  const hasRole = newMember.roles.cache.has(CONTENT_CREATOR_ROLE_ID);
+  if (hadRole === hasRole) return;
 
-  const contentCreatorAdded = !oldMember.roles.cache.has(CONTENT_CREATOR_ROLE_ID)
-    && newMember.roles.cache.has(CONTENT_CREATOR_ROLE_ID);
-  const signedPlayerAdded = !oldMember.roles.cache.has(SIGNED_PLAYER_ROLE_ID)
-    && newMember.roles.cache.has(SIGNED_PLAYER_ROLE_ID);
-
-  if (!contentCreatorAdded && !signedPlayerAdded) return;
-
-  try {
-    if (contentCreatorAdded) {
-      const creationAudit = await roleCreationAuditContext(
-        newMember, CONTENT_CREATOR_ROLE_ID, 'role:auto-content-creator'
-      );
-      const data = await licenseApi.createContentCreator({
-        guildId: newMember.guild.id,
-        discordUserId: newMember.id,
-        discordUsername: newMember.displayName || newMember.user.username,
-        ...creationAudit
-      }).catch((error) => {
-        if (error.code === 'already_claimed') return null;
-        throw error;
-      });
-      await removeConflictingAccessRoles(
-        newMember,
-        'Content Creator reemplaza otros accesos Zentux'
-      );
-      if (data?.license?.licenseKey) {
-        console.log(`Content Creator priorizado para ${newMember.id}: ${data.license.licenseKey}`);
-      }
-    }
-
-    if (signedPlayerAdded) {
-      const creationAudit = await roleCreationAuditContext(
-        newMember, SIGNED_PLAYER_ROLE_ID, 'role:auto-signed-player'
-      );
-      const data = await licenseApi.createSignedPlayer({
-        guildId: newMember.guild.id,
-        discordUserId: newMember.id,
-        discordUsername: newMember.displayName || newMember.user.username,
-        ...creationAudit
-      }).catch((error) => {
-        if (error.code === 'already_claimed') return null;
-        throw error;
-      });
-      await removeConflictingAccessRoles(
-        newMember,
-        'Signed Player reemplaza otros accesos Zentux'
-      );
-      if (data?.license?.licenseKey) {
-        console.log(`Signed Player priorizado para ${newMember.id}: ${data.license.licenseKey}`);
-      }
-    }
-  } catch (error) {
-    console.error('No se pudo priorizar el rol manual de licencia:', error.code || error.message);
+  // Re-read Discord to avoid acting on an outdated gateway event.
+  const member = await fetchCurrentMember(newMember.guild, newMember.id);
+  if (!member?.roles.cache.has(CONTENT_CREATOR_ROLE_ID)) {
+    await licenseApi.deactivateContentCreator(GUILD_ID, newMember.id);
+    return;
   }
+  if (hadRole || !hasRole) return;
+  const creationAudit = await roleCreationAuditContext(
+    member, CONTENT_CREATOR_ROLE_ID, 'role:auto-content-creator'
+  );
+  await licenseApi.createContentCreator({
+    guildId: member.guild.id,
+    discordUserId: member.id,
+    discordUsername: member.displayName || member.user.username,
+    ...creationAudit
+  }).catch((error) => {
+    if (error.code !== 'already_claimed') throw error;
+  });
+  // A moderator may remove the role while the license API request is in flight.
+  if (!await validateRoleDependentLicense(member.guild, member.id, 'content_creator')) return;
+  await removeConflictingAccessRoles(member, 'Content Creator reemplaza otros accesos Zentux');
+  console.log(`Beneficio Content Creator sincronizado para ${member.id}.`);
 }
 
 async function expirePendingBets() {
@@ -1854,11 +1781,11 @@ client.once(Events.ClientReady, async (readyClient) => {
       console.error('No se pudo actualizar el apodo del bot:', error.message);
     });
   }
+  await syncContentCreatorLicenses();
+  await retireSignedPlayerLicenses();
   await syncBuyerRoles();
   await syncPurchaseLogs();
   await syncLicenseEventLogs();
-  await syncContentCreatorLicenses();
-  await syncSignedPlayerLicenses();
   await syncSitePresence();
   await expirePendingBets();
   await finishExpiredGiveaways();
@@ -1866,7 +1793,7 @@ client.once(Events.ClientReady, async (readyClient) => {
   setInterval(syncPurchaseLogs, PURCHASE_SYNC_SECONDS * 1000).unref();
   setInterval(syncLicenseEventLogs, PURCHASE_SYNC_SECONDS * 1000).unref();
   setInterval(syncContentCreatorLicenses, SYNC_MINUTES * 60 * 1000).unref();
-  setInterval(syncSignedPlayerLicenses, SYNC_MINUTES * 60 * 1000).unref();
+  setInterval(retireSignedPlayerLicenses, SYNC_MINUTES * 60 * 1000).unref();
   setInterval(syncSitePresence, 60 * 1000).unref();
   setInterval(syncDiscordMembership, 60 * 60 * 1000).unref();
   setInterval(expirePendingBets, 60 * 1000).unref();
@@ -1891,7 +1818,7 @@ client.on(Events.GuildMemberRemove, (member) => {
 });
 
 client.on(Events.GuildMemberUpdate, (oldMember, newMember) => {
-  handlePriorityRoleAdded(oldMember, newMember).catch((error) => {
+  handlePriorityRoleChanged(oldMember, newMember).catch((error) => {
     console.error('No se pudo procesar cambio de roles prioritarios:', error.code || error.message);
   });
 });
@@ -1930,7 +1857,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
       if (interaction.commandName === 'liberar-admin') return await handleReleaseCommand(interaction);
       if (interaction.commandName === 'liberar-access') return await handleReleaseCommand(interaction);
       if (interaction.commandName === 'generar') return await handleGenerate(interaction);
-      if (interaction.commandName === 'signed-player') return await handleGenerate(interaction);
+      if (['signed-player', 'admin-signed-player'].includes(interaction.commandName)) {
+        return await interaction.reply({ content: 'El programa Signed Players fue retirado de Zentux.', flags: EPHEMERAL });
+      }
       if (interaction.commandName === 'generar-giveaway') return await handleGenerate(interaction);
       if (interaction.commandName === 'darkey') return await handleGiveawayGrant(interaction);
       if (interaction.commandName === 'giveaway') return await handleGiveawayCommand(interaction);

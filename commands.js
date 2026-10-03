@@ -1,8 +1,6 @@
 const { ChannelType, PermissionFlagsBits, SlashCommandBuilder } = require('discord.js');
 
-const economyCommandModules = [
-  require('./commands/admin-signed-player')
-];
+const economyCommandModules = [];
 
 const commands = [
   new SlashCommandBuilder()
@@ -140,15 +138,6 @@ const commands = [
       subcommand
         .setName('key')
         .setDescription('Reclama tu key exclusiva de Zentux Content Creator')
-    ),
-  new SlashCommandBuilder()
-    .setName('signed-player')
-    .setDescription('Reclama el beneficio exclusivo de Zentux Signed Players')
-    .setDMPermission(false)
-    .addSubcommand((subcommand) =>
-      subcommand
-        .setName('key')
-        .setDescription('Reclama tu key exclusiva de Zentux Signed Player')
     ),
   new SlashCommandBuilder()
     .setName('generar-giveaway')
