@@ -38,6 +38,7 @@ function createLicenseApi({ baseUrl, secret }) {
   }
 
   return {
+    communityChatRoles: (payload) => request('/api/discord/community-chat/roles', payload),
     redeem: (payload) => request('/api/discord/redeem', payload),
     info: (discordUserId) => request('/api/discord/info', { discordUserId }),
     purchaseShop: (payload) => request('/api/discord/shop/purchase', payload),
