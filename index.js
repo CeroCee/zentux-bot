@@ -22,6 +22,7 @@ const database = require('./database/db');
 const { commands, economyCommandModules } = require('./commands');
 const { createLicenseApi, LicenseApiError } = require('./license-api');
 const { startReleaseMonitor } = require('./utils/releaseMonitor');
+const { startCommunityChatRoles } = require('./community-chat-roles');
 
 const requiredEnvironment = [
   'GUILD_ID',
@@ -1781,6 +1782,7 @@ async function syncDiscordMembership() {
 }
 
 client.once(Events.ClientReady, async (readyClient) => {
+  startCommunityChatRoles(readyClient, { guildId: GUILD_ID, request: licenseApi.communityChatRoles });
   console.log('Sistema de Z-Coins retirado: se omite la migracion de economia local.');
   console.log(`Bot listo como ${readyClient.user.tag}`);
   await syncApplicationCommands();
